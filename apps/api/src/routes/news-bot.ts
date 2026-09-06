@@ -43,9 +43,12 @@ export async function newsBotRoutes(app: FastifyInstance) {
     const run = await prisma.newsBotRun.findUnique({
       where: { id },
       include: {
-        // Source/run logs have no per-item relation. Do not cap them: each source
-        // failure must remain visible even when a long run produces many item logs.
-        logs: { where: { itemId: null }, orderBy: { createdAt: 'asc' }, include: { source: { select: { id: true, name: true, sourceLabel: true, feedUrl: true } } }, },
+        // Do not cap logs or discard item logs. A failed item can be retried and
+        // reassigned to a later run; its original run must still show the failure.
+        logs: { orderBy: { createdAt: 'asc' }, include: {
+          source: { select: { id: true, name: true, sourceLabel: true, feedUrl: true } },
+          item: { select: { id: true, sourceTitle: true, sourceUrl: true, status: true, retryCount: true } }
+        } },
         items: {
           orderBy: { createdAt: 'desc' },
           include: {

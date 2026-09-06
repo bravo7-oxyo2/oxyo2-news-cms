@@ -6,7 +6,7 @@ type Settings = { enabled: boolean; intervalMinutes: number; articleLimit: numbe
 type Source = { id: string; name: string; feedUrl: string; sourceLabel: string; category: string; isEnabled: boolean }
 type Run = { id: string; trigger: string; status: string; sourceCount: number; processedCount: number; createdCount: number; skippedCount: number; failedCount: number; error?: string | null; createdAt: string; finishedAt?: string | null; _count?: { items: number; logs: number } }
 type RunPage = { data: Run[]; meta: { page: number; limit: number; total: number; totalPages: number } }
-type Log = { id: string; level: string; stage: string; message: string; context?: Record<string, unknown> | null; createdAt: string; itemId?: string | null; source?: { id: string; name: string; sourceLabel?: string; feedUrl?: string } | null }
+type Log = { id: string; level: string; stage: string; message: string; context?: Record<string, unknown> | null; createdAt: string; itemId?: string | null; source?: { id: string; name: string; sourceLabel?: string; feedUrl?: string } | null; item?: { id: string; sourceTitle: string; sourceUrl: string; status: string; retryCount: number } | null }
 type RunItem = { id: string; sourceUrl: string; sourceTitle: string; sourceExcerpt?: string | null; sourcePublishedAt?: string | null; status: string; error?: string | null; retryCount?: number; lastFailureAt?: string | null; source: { name: string; sourceLabel: string; feedUrl: string }; content?: { id: string; title: string; slug: string; status: string; excerpt: string; sourceUrl?: string | null; visualNeedsReview?: boolean; translations?: Array<{ language: string }>; coverMedia?: { url: string } | null } | null; logs: Log[] }
 type RunDetail = Run & { logs: Log[]; items: RunItem[]; startedAt?: string | null }
 const empty = { name: '', feedUrl: '', sourceLabel: '', category: 'General', isEnabled: false }
@@ -98,15 +98,25 @@ function RunDashboard({ run, busy, close, stop }: { run: RunDetail; busy: boolea
   // item card, so keep it visible in both All and Issues. This intentionally does
   // not depend on a single stage name; future source adapters remain inspectable.
   const sourceIssues = runLogs.filter(log => log.level === 'ERROR' || log.stage === 'source-failed')
+  const representedItemIds = new Set(run.items.map(item => item.id))
+  // Retried items now belong to their newest run. Preserve the failed event in
+  // its original run so the historical Issues view never becomes empty.
+  const historicalItemIssues = run.logs.filter(log => Boolean(log.itemId) && !representedItemIds.has(log.itemId!) && (log.level === 'ERROR' || log.stage === 'article-failed'))
   const isActive = run.status === 'QUEUED' || run.status === 'RUNNING'
-  const attentionCount = failedItems.length + sourceIssues.length
+  const recordedAttentionCount = failedItems.length + sourceIssues.length + historicalItemIssues.length
+  // Older runs may predate detailed logs. Keep the count honest and make even
+  // those legacy failures inspectable instead of rendering an empty Issues tab.
+  const unresolvedIssueCount = Math.max(0, run.failedCount - recordedAttentionCount)
+  const attentionCount = recordedAttentionCount + unresolvedIssueCount
   const liveCounts = { processed: isActive ? run.items.filter(item => item.status !== 'PENDING').length : run.processedCount, created: isActive ? run.items.filter(item => item.status === 'CREATED').length : run.createdCount, skipped: isActive ? run.items.filter(item => item.status === 'SKIPPED').length : run.skippedCount, failed: isActive ? attentionCount : Math.max(run.failedCount, attentionCount) }
   const visibleItems = run.items.filter(item => filter === 'all' || filter === 'attention' ? (filter === 'all' || item.status === 'FAILED') : item.status === (filter === 'created' ? 'CREATED' : 'SKIPPED'))
   // Source failures happen before an article item can be created. They belong in
   // both the combined queue and the issues view, not just the issues view.
   const visibleSourceIssues = filter === 'all' || filter === 'attention' ? sourceIssues : []
-  const visibleQueueCount = visibleItems.length + visibleSourceIssues.length
-  const queueTotal = run.items.length + sourceIssues.length
+  const visibleHistoricalItemIssues = filter === 'all' || filter === 'attention' ? historicalItemIssues : []
+  const visibleUnresolvedIssueCount = filter === 'all' || filter === 'attention' ? unresolvedIssueCount : 0
+  const visibleQueueCount = visibleItems.length + visibleSourceIssues.length + visibleHistoricalItemIssues.length + visibleUnresolvedIssueCount
+  const queueTotal = run.items.length + sourceIssues.length + historicalItemIssues.length + unresolvedIssueCount
   const statusTone = run.status === 'FAILED' || run.status === 'PARTIAL' ? 'attention' : run.status === 'RUNNING' || run.status === 'QUEUED' ? 'running' : run.status === 'CANCELLED' ? 'muted' : 'success'
   const statusText = run.status === 'RUNNING' ? 'Processing the selected articles now' : run.status === 'QUEUED' ? 'Queued and waiting for the scheduler' : run.status === 'SUCCEEDED' ? 'Completed successfully' : run.status === 'CANCELLED' ? 'Stopped by an administrator' : run.status === 'FAILED' ? 'Run needs attention' : 'Completed with items to review'
   const StatusIcon = statusTone === 'attention' ? AlertCircle : statusTone === 'running' ? Bot : CheckCircle2
@@ -115,13 +125,23 @@ function RunDashboard({ run, busy, close, stop }: { run: RunDetail; busy: boolea
     <section className={`run-overview ${statusTone}`} aria-label="Run summary"><StatusIcon /><b>{statusText}</b><span>{run.sourceCount} sources</span><span>{liveCounts.processed} processed</span><span>{liveCounts.created} drafts</span>{liveCounts.skipped > 0 && <span>{liveCounts.skipped} skipped</span>}{liveCounts.failed > 0 && <button onClick={() => setFilter('attention')}><AlertCircle />{liveCounts.failed} need attention</button>}</section>
     <details className="source-checks"><summary><span>Source checks</span><small>{sourceChecks.length} of {run.sourceCount} reported</small><ChevronDown /></summary><div>{sourceChecks.map(log => <article className={`${logTone(log)} ${log.stage === 'source-no-new-items' ? 'empty' : ''}`} key={log.id}><b>{log.source?.name}</b><span>{log.stage === 'source-no-new-items' ? <>No new feed items · {String(log.context?.discovered ?? 0)} discovered{latestFeedSummary(log.context) && <> · Latest: {latestFeedSummary(log.context)}</>}</> : log.stage === 'source-discovered' ? `${String(log.context?.selected ?? 0)} selected from ${String(log.context?.unseen ?? 0)} unseen` : log.message}</span></article>)}</div></details>
     <div className="run-section-head"><div><span className="eyebrow">Processing queue</span><h3>Selected items <small>{visibleQueueCount} of {queueTotal}</small></h3></div><div className="run-filters" aria-label="Filter queue"><button className={filter === 'all' ? 'active' : ''} onClick={() => setFilter('all')}>All <b>{queueTotal}</b></button><button className={filter === 'attention' ? 'active attention' : ''} onClick={() => setFilter('attention')}>Issues <b>{liveCounts.failed}</b></button><button className={filter === 'created' ? 'active' : ''} onClick={() => setFilter('created')}>Drafts <b>{liveCounts.created}</b></button><button className={filter === 'skipped' ? 'active' : ''} onClick={() => setFilter('skipped')}>Skipped <b>{liveCounts.skipped}</b></button></div></div>
-    <div className="run-items">{visibleSourceIssues.map(log => <RunSourceIssueCard log={log} key={log.id} />)}{visibleItems.map(item => <RunItemCard item={item} key={item.id} />)}{!visibleQueueCount && <div className="run-empty"><FileText /><b>No articles in this view</b><small>Try another filter to inspect the rest of this run.</small></div>}</div>
+    <div className="run-items">{visibleSourceIssues.map(log => <RunSourceIssueCard log={log} key={log.id} />)}{visibleHistoricalItemIssues.map(log => <RunHistoricalItemIssueCard log={log} key={log.id} />)}{Array.from({ length: visibleUnresolvedIssueCount }, (_, index) => <RunUnresolvedIssueCard key={`unresolved-${index}`} />)}{visibleItems.map(item => <RunItemCard item={item} key={item.id} />)}{!visibleQueueCount && <div className="run-empty"><FileText /><b>No articles in this view</b><small>Try another filter to inspect the rest of this run.</small></div>}</div>
     <details className="run-events"><summary><span>System activity</span><small>{runLogs.length} events</small><ChevronDown /></summary><div className="run-logs">{runLogs.map(log => <article className={`run-log ${logTone(log)}`} key={log.id}><time>{format(log.createdAt)}</time><div><b>{log.stage.replaceAll('-', ' ')}</b><p>{log.message}</p>{log.context && <details><summary>Technical context</summary><pre>{JSON.stringify(log.context, null, 2)}</pre></details>}</div></article>)}</div></details>
   </div></section></div>
 }
 
 function RunSourceIssueCard({ log }: { log: Log }) {
   return <article className="run-item failed source-issue"><div className="run-item-toggle"><span className="run-item-source">{log.source?.name || 'SOURCE'}</span><span className="run-item-title"><b>Source feed could not be checked</b><small>{format(log.createdAt)} · No article was created because discovery failed before item selection.</small></span><em className="badge archived">SOURCE ISSUE</em></div><div className="run-item-detail"><div className="alert"><b>Source processing issue</b>{log.message}</div>{log.source?.feedUrl && <div className="item-links"><a href={log.source.feedUrl} target="_blank" rel="noreferrer noopener">Open configured feed <ExternalLink /></a></div>}{log.context && <details className="article-events"><summary>Technical context</summary><div className="item-logs"><div className={`item-log ${logTone(log)}`}><time>{format(log.createdAt)}</time><span><b>{log.stage.replaceAll('-', ' ')}</b>{JSON.stringify(log.context, null, 2)}</span></div></div></details>}</div></article>
+}
+
+function RunHistoricalItemIssueCard({ log }: { log: Log }) {
+  const title = log.item?.sourceTitle || (typeof log.context?.title === 'string' ? log.context.title : 'Article processing failed')
+  const sourceUrl = log.item?.sourceUrl || (typeof log.context?.sourceUrl === 'string' ? log.context.sourceUrl : undefined)
+  return <article className="run-item failed source-issue"><div className="run-item-toggle"><span className="run-item-source">{log.source?.name || 'SOURCE'}</span><span className="run-item-title"><b>{title}</b><small>{format(log.createdAt)} · This article failed during this run and was retried later.</small></span><em className="badge archived">FAILED</em></div><div className="run-item-detail"><div className="alert"><b>Processing issue</b>{log.message}</div>{sourceUrl && <div className="item-links"><a href={sourceUrl} target="_blank" rel="noreferrer noopener">View source <ExternalLink /></a></div>}{log.item && <small className="retry-history">Current item status: {log.item.status}{log.item.retryCount ? ` · ${log.item.retryCount} retries` : ''}</small>}{log.context && <details className="article-events"><summary>Technical context</summary><div className="item-logs"><div className={`item-log ${logTone(log)}`}><time>{format(log.createdAt)}</time><span><b>{log.stage.replaceAll('-', ' ')}</b>{JSON.stringify(log.context, null, 2)}</span></div></div></details>}</div></article>
+}
+
+function RunUnresolvedIssueCard() {
+  return <article className="run-item failed source-issue"><div className="run-item-toggle"><span className="run-item-source">RUN</span><span className="run-item-title"><b>Recorded failure needs review</b><small>This run recorded a failure, but its detailed item log is unavailable (typically from an older run or removed source).</small></span><em className="badge archived">ISSUE</em></div><div className="run-item-detail"><div className="alert"><b>Run issue</b>Open System activity to review the retained run events. New runs retain historical article failures in this view.</div></div></article>
 }
 
 function RunItemCard({ item }: { item: RunItem }) {
