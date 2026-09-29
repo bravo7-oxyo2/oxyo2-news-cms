@@ -1,4 +1,4 @@
-import { parseFeed, type FeedItem } from './verification.js'
+import { parseFeed, robotsAllows, type FeedItem } from './verification.js'
 
 export type ConfiguredSource = { feedUrl: string }
 export type FeedDiscovery = {
@@ -17,6 +17,8 @@ export interface NewsSourceAdapter {
 }
 
 const FEED_MAX_ATTEMPTS = 3
+const ARTICLE_MAX_ATTEMPTS = 2
+const ARTICLE_USER_AGENT = 'ThePaperLeafNewsBot/1.0 (+https://thepaperleaf.com/llms.txt)'
 const feedHeaders = {
   // This remains an identifiable bot rather than impersonating a browser. The
   // additional contact URL helps publishers diagnose a blocked feed request.
@@ -109,17 +111,70 @@ export function extractSaysArticleBody(html: string) {
     .replace(/^Cover image via .*?Follow us on .*?latest stories and breaking news\.\s*/i, '')
 }
 
+export class ArticleContextError extends Error {
+  constructor(message: string, readonly diagnostic: string, readonly context: Record<string, unknown>) { super(message); this.name = 'ArticleContextError' }
+}
+function safePublicArticleUrl(value: string) {
+  let url: URL
+  try { url = new URL(value) } catch { return null }
+  const host = url.hostname.toLowerCase()
+  if (!/^https?:$/.test(url.protocol) || host === 'localhost' || host.endsWith('.local') || /^127\.|^0\.|^10\.|^192\.168\.|^169\.254\.|^172\.(1[6-9]|2\d|3[01])\./.test(host) || host === '::1') return null
+  return url
+}
+async function fetchPublic(url: URL, accept: string) {
+  let current = url
+  for (let redirect = 0; redirect <= 4; redirect++) {
+    const response = await fetch(current, { headers: { 'user-agent': ARTICLE_USER_AGENT, accept }, signal: AbortSignal.timeout(15_000), redirect: 'manual' })
+    if (response.status >= 300 && response.status < 400) {
+      const next = response.headers.get('location')
+      const resolved = next && safePublicArticleUrl(new URL(next, current).toString())
+      if (!resolved) throw new ArticleContextError('Article redirect was blocked because it is not a safe public HTTP(S) URL.', 'unsafe-redirect', { finalUrl: current.toString(), status: response.status })
+      current = resolved; continue
+    }
+    return response
+  }
+  throw new ArticleContextError('Article request followed too many redirects.', 'too-many-redirects', { finalUrl: current.toString() })
+}
+function jsonLdBody(html: string) {
+  const scripts = [...html.matchAll(/<script\b(?=[^>]*type=["']application\/ld\+json["'])[^>]*>([\s\S]*?)<\/script>/gi)]
+  const visit = (value: unknown): string => {
+    if (Array.isArray(value)) return value.map(visit).find(Boolean) || ''
+    if (!value || typeof value !== 'object') return ''
+    const node = value as Record<string, unknown>; const kinds = Array.isArray(node['@type']) ? node['@type'] : [node['@type']]
+    if (kinds.some(kind => /article/i.test(String(kind))) && typeof node.articleBody === 'string') return textFromHtml(node.articleBody)
+    return Object.values(node).map(visit).find(Boolean) || ''
+  }
+  for (const script of scripts) try { const body = visit(JSON.parse(script[1] || '')); if (body) return body } catch { /* malformed publisher JSON-LD is not fatal */ }
+  return ''
+}
+function metadataText(html: string) {
+  const match = /<meta\b(?=[^>]*(?:name|property)=["'](?:description|og:description|twitter:description)["'])[^>]*content=["']([^"']+)["'][^>]*>/i.exec(html)?.[1]
+    || /<meta\b(?=[^>]*content=["']([^"']+)["'])[^>]*(?:name|property)=["'](?:description|og:description|twitter:description)["'][^>]*>/i.exec(html)?.[1]
+  return match ? decodeHtml(match).replace(/\s+/g, ' ').trim() : ''
+}
+
 export async function enhanceArticleBody(article: FeedItem) {
   const isSays = new URL(article.url).hostname.replace(/^www\./, '') === 'says.com'
   // SAYS's feed is an intentionally short teaser, even when it is longer than the
   // generic threshold, so always prefer its article-page copy.
-  if (!isSays && article.body.length >= 400) return { ...article, extractedFromArticle: false }
-  const response = await fetch(article.url, { headers: { 'user-agent': 'PaperleafNewsBot/1.0', accept: 'text/html,application/xhtml+xml' }, signal: AbortSignal.timeout(30_000), redirect: 'follow' })
-  if (!response.ok) throw new Error(`Article request failed: ${response.status} ${response.statusText}`)
-  const html = await response.text()
-  const section = isSays ? extractSaysArticleBody(html) : textFromHtml(/<article\b[^>]*>([\s\S]*?)<\/article>/i.exec(html)?.[1] || /<main\b[^>]*>([\s\S]*?)<\/main>/i.exec(html)?.[1] || '')
-  const body = section
-  return { ...article, body: body || article.body, extractedFromArticle: Boolean(body) }
+  if (!isSays && article.body.length >= 400) return { ...article, extractedFromArticle: false, extraction: 'feed', finalUrl: undefined as string | undefined }
+  const target = safePublicArticleUrl(article.url)
+  if (!target) throw new ArticleContextError('Article URL is not a safe public HTTP(S) URL.', 'unsafe-url', { sourceUrl: article.url })
+  let robots = ''
+  try { const result = await fetchPublic(new URL('/robots.txt', target), 'text/plain,*/*;q=0.1'); if (result.ok) robots = await result.text() } catch { /* unavailable robots is logged implicitly through the final request outcome */ }
+  if (robots && !robotsAllows(robots, target.pathname, 'thepaperleafnewsbot')) throw new ArticleContextError('Publisher robots.txt does not allow ThePaperLeafNewsBot to retrieve this article.', 'robots-denied', { sourceUrl: target.toString() })
+  let last: unknown
+  for (let attempt = 1; attempt <= ARTICLE_MAX_ATTEMPTS; attempt++) try {
+    const response = await fetchPublic(target, 'text/html,application/xhtml+xml')
+    if (!response.ok) throw new ArticleContextError(`Article request failed: ${response.status} ${response.statusText}`, `http-${response.status}`, { finalUrl: response.url, status: response.status, attempts: attempt })
+    const html = await response.text(); const semantic = textFromHtml(/<article\b[^>]*>([\s\S]*?)<\/article>/i.exec(html)?.[1] || /<main\b[^>]*>([\s\S]*?)<\/main>/i.exec(html)?.[1] || '')
+    const candidates = isSays ? [['says-story-content', extractSaysArticleBody(html)], ['jsonld-article-body', jsonLdBody(html)], ['semantic-article', semantic], ['metadata-description', metadataText(html)]] : [['jsonld-article-body', jsonLdBody(html)], ['semantic-article', semantic], ['metadata-description', metadataText(html)]]
+    const [extraction, body] = candidates.find(([, text]) => String(text).trim().length >= 200) || ['none', '']
+    if (!body) throw new ArticleContextError('Publisher article page did not provide enough readable text for a rewrite.', 'insufficient-page-text', { finalUrl: response.url, status: response.status, extractedCharacters: candidates.map(([method, text]) => ({ method, characters: String(text).length })) })
+    return { ...article, body: String(body), extractedFromArticle: true, extraction, finalUrl: response.url }
+  } catch (error) { last = error; if (attempt < ARTICLE_MAX_ATTEMPTS) await wait(500 * attempt) }
+  if (last instanceof ArticleContextError) throw last
+  throw new ArticleContextError('Article context request failed.', 'network-error', { sourceUrl: target.toString(), reason: last instanceof Error ? last.message : 'network error' })
 }
 
 function articleImageUrl(html: string, pageUrl: string) {

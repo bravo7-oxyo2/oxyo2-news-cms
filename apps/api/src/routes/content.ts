@@ -3,11 +3,12 @@ import { prisma, ContentLanguage, ContentStatus, ContentType } from '@cms/databa
 import { requireAdmin } from '../auth.js'
 import { normalizeStatus, renderMarkdown, slugify, wordCount } from '../lib/content.js'
 import { pingIndexNow } from '../lib/indexnow.js'
+import { isIsoCountryCode, normalizeCountryCode, publicCountryConfiguration } from '../news-bot/countries.js'
 
 const types = { posts: ContentType.POST, pages: ContentType.PAGE }
 const translationSelect = { id: true, language: true, title: true, excerpt: true, markdown: true, html: true, wordCount: true, seoTitle: true, seoDescription: true, createdAt: true, updatedAt: true }
 const mediaSelect = { id: true, url: true, altText: true, width: true, height: true, provider: true, providerAssetId: true, attributionName: true, attributionUrl: true, license: true, visualOrigin: true, caption: true }
-const select = { id: true, type: true, status: true, title: true, slug: true, excerpt: true, category: true, categoryId: true, categoryRef: { select: { id: true, name: true, nameZh: true, slug: true, description: true, descriptionZh: true, color: true } }, authorName: true, sourceLabel: true, sourceUrl: true, isFeatured: true, markdown: true, html: true, wordCount: true, coverMediaId: true, tags: true, seoTitle: true, seoDescription: true, publishedAt: true, scheduledAt: true, createdAt: true, updatedAt: true, visualNeedsReview: true, translations: { select: translationSelect }, coverMedia: { select: mediaSelect } }
+const select = { id: true, type: true, status: true, title: true, slug: true, excerpt: true, category: true, categoryId: true, categoryRef: { select: { id: true, name: true, nameZh: true, slug: true, description: true, descriptionZh: true, color: true } }, authorName: true, sourceLabel: true, sourceUrl: true, sourceCountryCode: true, isFeatured: true, markdown: true, html: true, wordCount: true, coverMediaId: true, tags: true, seoTitle: true, seoDescription: true, publishedAt: true, scheduledAt: true, createdAt: true, updatedAt: true, visualNeedsReview: true, translations: { select: translationSelect }, coverMedia: { select: mediaSelect } }
 
 export function contentSearchFilters(q: Record<string,string>) {
   const and:any[]=[]
@@ -20,12 +21,30 @@ export function publicContentWhere(type: ContentType, q: Record<string,string>, 
   return { type, status: 'PUBLISHED', publishedAt: { lte: now }, ...(q.tag ? { tags: { has: q.tag } } : {}), ...contentSearchFilters(q) }
 }
 
+export function publicListingCountry(requestedCountry: unknown, visibleCountries: Iterable<string>, defaultCountryCode: string) {
+  const requested = String(requestedCountry || '').trim().toUpperCase()
+  if (requested === 'ALL') return 'all'
+  const visible = new Set([...visibleCountries].map(country => country.toUpperCase()))
+  return isIsoCountryCode(requested) && visible.has(requested) ? requested : defaultCountryCode
+}
+
+export async function publicPostListingWhere(q: Record<string,string>, now: Date) {
+  const type = ContentType.POST
+  const configuration = await publicCountryConfiguration()
+  const visibleCountries = new Set(configuration.countries.map(country => country.code))
+  // A country omitted from the public configuration is hidden only from lists.
+  // Direct post routes, feeds and sitemaps intentionally do not call this filter.
+  const selected = publicListingCountry(q.country, visibleCountries, configuration.defaultCountryCode)
+  const hiddenCodes = (await prisma.newsBotCountry.findMany({ where: { displayEnabled: false }, select: { code: true } })).map(country => country.code)
+  return { ...publicContentWhere(type, q, now), ...(hiddenCodes.length ? { sourceCountryCode: { notIn: hiddenCodes } } : {}), ...(selected !== 'all' ? { sourceCountryCode: selected } : {}) }
+}
+
 function dataFrom(body: any) {
   const markdown = String(body.markdown ?? '')
   const status = normalizeStatus(String(body.status ?? 'DRAFT'), body.scheduledAt) as ContentStatus
   const sourceUrl = body.sourceUrl ? String(body.sourceUrl).trim() : null
   if (sourceUrl) new URL(sourceUrl)
-  return { type: body.type as ContentType, status, title: String(body.title ?? '').trim(), slug: slugify(body.slug || body.title || ''), excerpt: String(body.excerpt ?? ''), category: String(body.category ?? 'General').trim() || 'General', categoryId: body.categoryId || null, authorName: String(body.authorName ?? 'Editorial Desk').trim() || 'Editorial Desk', sourceLabel: body.sourceLabel ? String(body.sourceLabel).trim() : null, sourceUrl, isFeatured: Boolean(body.isFeatured), markdown, html: renderMarkdown(markdown), wordCount: wordCount(markdown), tags: Array.isArray(body.tags) ? body.tags.map(String).filter(Boolean).slice(0, 20) : [], seoTitle: body.seoTitle || null, seoDescription: body.seoDescription || null, coverMediaId: body.coverMediaId || null, scheduledAt: status === 'SCHEDULED' ? new Date(body.scheduledAt) : null, publishedAt: status === 'PUBLISHED' ? (body.publishedAt ? new Date(body.publishedAt) : new Date()) : null }
+  return { type: body.type as ContentType, status, title: String(body.title ?? '').trim(), slug: slugify(body.slug || body.title || ''), excerpt: String(body.excerpt ?? ''), category: String(body.category ?? 'General').trim() || 'General', categoryId: body.categoryId || null, authorName: String(body.authorName ?? 'Editorial Desk').trim() || 'Editorial Desk', sourceLabel: body.sourceLabel ? String(body.sourceLabel).trim() : null, sourceUrl, sourceCountryCode: normalizeCountryCode(body.sourceCountryCode || 'MY'), isFeatured: Boolean(body.isFeatured), markdown, html: renderMarkdown(markdown), wordCount: wordCount(markdown), tags: Array.isArray(body.tags) ? body.tags.map(String).filter(Boolean).slice(0, 20) : [], seoTitle: body.seoTitle || null, seoDescription: body.seoDescription || null, coverMediaId: body.coverMediaId || null, scheduledAt: status === 'SCHEDULED' ? new Date(body.scheduledAt) : null, publishedAt: status === 'PUBLISHED' ? (body.publishedAt ? new Date(body.publishedAt) : new Date()) : null }
 }
 
 export function localizeContent(item: any, language: string | undefined) {
@@ -101,8 +120,12 @@ export async function publicRoutes(app: FastifyInstance) {
     app.get(`/${path}`, async (req, reply) => {
       reply.header('Cache-Control','public, max-age=60, stale-while-revalidate=300'); const q = req.query as Record<string,string>; const page = Math.max(1,Number(q.page)||1); const limit = Math.min(50,Math.max(1,Number(q.limit)||10)); const now = new Date()
       await prisma.content.updateMany({ where: { type, status: 'SCHEDULED', scheduledAt: { lte: now } }, data: { status: 'PUBLISHED', publishedAt: now } })
-      const where: any = publicContentWhere(type, q, now); const [items,total] = await prisma.$transaction([prisma.content.findMany({ where, select, orderBy: [{ isFeatured: 'desc' }, { publishedAt: 'desc' }] as any, skip:(page-1)*limit,take:limit }),prisma.content.count({where})]); return { data:await withImageCredits(items, q.lang),meta:{page,limit,total,pages:Math.ceil(total/limit)} }
+      const where: any = type === ContentType.POST ? await publicPostListingWhere(q, now) : publicContentWhere(type, q, now); const [items,total] = await prisma.$transaction([prisma.content.findMany({ where, select, orderBy: [{ isFeatured: 'desc' }, { publishedAt: 'desc' }] as any, skip:(page-1)*limit,take:limit }),prisma.content.count({where})]); return { data:await withImageCredits(items, q.lang),meta:{page,limit,total,pages:Math.ceil(total/limit)} }
     })
     app.get(`/${path}/:slug`, async (req, reply) => { reply.header('Cache-Control','public, max-age=60, stale-while-revalidate=300'); const item = await prisma.content.findUnique({ where: { type_slug: { type, slug: (req.params as any).slug } }, select }); return item?.status === 'PUBLISHED' && item.publishedAt && item.publishedAt <= new Date() ? { data: (await withImageCredits([item], (req.query as any).lang))[0] } : reply.code(404).send({error:{code:'NOT_FOUND',message:'Content not found'}}) })
   }
+  app.get('/countries', async (_req, reply) => {
+    reply.header('Cache-Control', 'public, max-age=60, stale-while-revalidate=300')
+    return { data: await publicCountryConfiguration() }
+  })
 }

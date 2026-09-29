@@ -284,7 +284,7 @@ h3{font-size:1.5rem;line-height:1.02;letter-spacing:-.045em;font-weight:900;text
 .card:hover .article-image img{transform:scale(1.04)}
 .card .article-image{height:220px;min-height:220px;border-radius:18px}
 .card .article-image img,.card .placeholder{height:220px;min-height:220px}
-.card .kicker{font-size:10px;margin:3px 4px 0;align-self:start;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.card .kicker{font-size:10px;margin:3px 4px 6px;align-self:start;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .card h3{margin:0 4px;min-height:3.08em;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
 .card p{margin:0 4px 4px;font-size:14px;min-height:4.95em;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
 .featured-card{
@@ -653,3 +653,4 @@ footer{border-top:1px solid var(--line);padding:35px max(20px,calc((100vw - 1200
 .pager a{color:var(--ink);text-decoration:none;border:1px solid var(--line);border-radius:999px;padding:9px 16px;font-size:13px;font-weight:600;min-height:44px;display:inline-flex;align-items:center}
 .pager a:hover{border-color:var(--blue);color:var(--blue)}
 .pager-status{color:var(--muted);font-size:12px;letter-spacing:.06em}
+.country-switcher{display:flex;gap:8px;overflow:auto;padding:10px max(16px,calc((100vw - 1200px)/2));border-bottom:1px solid var(--line);background:#fff;scrollbar-width:none}.country-switcher + main .breadcrumb{padding-top:18px}.country-switcher button{border:1px solid var(--line);background:#f5f6f4;color:var(--ink);border-radius:999px;padding:7px 12px;white-space:nowrap;font-weight:800;font-size:12px}.country-switcher button.active{background:var(--ink);color:#fff;border-color:var(--ink)}.country-origin{display:inline-flex;align-items:center;justify-self:start;width:fit-content;border-radius:999px;background:#edf1ed;color:#38694e;padding:2px 7px;font-size:10px;font-weight:900;letter-spacing:.05em}

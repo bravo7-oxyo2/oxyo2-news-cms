@@ -10,14 +10,15 @@ export default function CategoryPage({ categories }: { categories: Category[] })
   const { locale, link, t } = useLocale()
   const { category = '' } = useParams()
   const [params] = useSearchParams()
-  const page = Math.max(1, Number(params.get('page')) || 1)
+  const page = Math.max(1, Number(params.get('page')) || 1); const country = params.get('country') || undefined
   const match = categories.find(item => item.slug === category)
   const readable = match ? categoryLabel(match, locale) : category.replaceAll('-', ' ')
   const query = match?.slug ?? category
   const bootstrap = bootstrapForCurrentLocale()
-  const { data, loading, error } = useAsync(() => fetchPosts({ category: query, limit: 18, page, lang: locale }), [query, locale, page], bootstrap?.listing)
+  const { data, loading, error } = useAsync(() => fetchPosts({ category: query, limit: 18, page, lang: locale, country }), [query, locale, page, country], bootstrap?.listing)
   const breadcrumb = { items: [{ name: t('home'), path: link('/') }, { name: readable, path: link(`/category/${category}`) }], jsonLdId: `breadcrumb-category-${category}` }
-  return <Listing title={readable} eyebrow={t('category')} posts={data?.data} loading={loading} error={error} description={match ? categoryDescription(match, locale) || t('categoryDescription', { category: readable }) : t('categoryDescription', { category: readable })} meta={data?.meta} pageHref={target => link(target > 1 ? `/category/${category}?page=${target}` : `/category/${category}`)} breadcrumb={breadcrumb} />
+  const countrySuffix = country ? `&country=${encodeURIComponent(country)}` : ''
+  return <Listing title={readable} eyebrow={t('category')} posts={data?.data} loading={loading} error={error} description={match ? categoryDescription(match, locale) || t('categoryDescription', { category: readable }) : t('categoryDescription', { category: readable })} meta={data?.meta} pageHref={target => link(`/category/${category}${target > 1 ? `?page=${target}${countrySuffix}` : country ? `?country=${encodeURIComponent(country)}` : ''}`)} breadcrumb={breadcrumb} />
 }
 
 export function Listing({ title, eyebrow, posts, loading, error, description, noIndex = false, meta, pageHref, breadcrumb }: { title: string; eyebrow: string; posts?: Post[]; loading: boolean; error?: string; description?: string; noIndex?: boolean; meta?: { page: number; pages: number }; pageHref?: (page: number) => string; breadcrumb?: { items: BreadcrumbItem[]; jsonLdId: string } }) {

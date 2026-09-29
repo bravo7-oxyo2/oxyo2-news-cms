@@ -4,6 +4,7 @@ import { canonicalUrl, findFeedUrls, parseFeed, robotsAllows, verificationSource
 import { insertInlineImages, isTerminalNewsBotItem, isWithinWorkingHours, shouldStartRun, sourceFingerprint } from './worker.js'
 import { MIN_SUBSTANTIVE_CHARACTERS, MIN_SUBSTANTIVE_PARAGRAPHS, chinesePrimaryMissing, duplicateIndexFromAi, fallbackAuxiliaryFromSource, fallbackMetadataFromMarkdown, normalizeEditorialTitle, parseAiJson, substantiveMarkdownDetails, usesLocalAi, validateRewrittenPost } from './openai.js'
 import { extractSaysArticleBody, shouldRetryFeedStatus } from './adapters.js'
+import { normalizeCountryCode, isIsoCountryCode } from './countries.js'
 
 const substantialMarkdown = Array.from({ length: 5 }, (_, i) => String.fromCharCode(65 + i).repeat(130)).join('\n\n')
 
@@ -18,6 +19,8 @@ describe('news bot verification helpers', () => {
   it('decodes numeric HTML entities in feed titles', () => expect(parseFeed('<rss><channel><item><title>Malaysia&#8217;s story</title><link>https://example.com/story</link></item></channel></rss>', 'https://example.com/feed')[0]?.title).toBe("Malaysia’s story"))
   it('honors a catch-all robots disallow', () => expect(robotsAllows('User-agent: *\nDisallow: /private', '/private/story')).toBe(false))
   it('allows paths outside a robots rule', () => expect(robotsAllows('User-agent: *\nDisallow: /private', '/news/story')).toBe(true))
+  it('honors a publisher rule specifically addressed to the production bot', () => expect(robotsAllows('User-agent: ThePaperLeafNewsBot\nDisallow: /article', '/article/story', 'thepaperleafnewsbot')).toBe(false))
+  it('accepts ISO country assignment and rejects malformed country codes', () => { expect(normalizeCountryCode('sg')).toBe('SG'); expect(isIsoCountryCode('MY')).toBe(true); expect(() => normalizeCountryCode('malaysia')).toThrow('ISO') })
   it('will not schedule work while the bot is disabled', () => expect(shouldStartRun({ enabled: false, lastScheduledAt: null, intervalMinutes: 5 })).toBe(false))
   it('uses the scheduled timestamp rather than run completion time for the next interval', () => expect(shouldStartRun({ enabled: true, lastScheduledAt: new Date('2026-07-22T12:00:00.000Z'), intervalMinutes: 5 }, new Date('2026-07-22T12:05:00.000Z').getTime())).toBe(true))
   it('only schedules runs inside the configured Malaysia working window', () => {

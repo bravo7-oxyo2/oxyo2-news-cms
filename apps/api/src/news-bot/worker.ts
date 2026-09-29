@@ -11,16 +11,23 @@ import { uploadRoot } from '../lib/uploads.js'
 import { classifyArticleCategory, findSemanticDuplicate, rewriteArticle, usesLocalAi } from './openai.js'
 import { canonicalUrl } from './verification.js'
 import { enhanceArticleBody, FeedRequestError, rssAtomAdapter } from './adapters.js'
+import { countrySettings } from './countries.js'
 import { fallbackCoverVisual, resolveVisual, type VisualAsset } from './visuals.js'
 
-type Source = { id: string; name: string; feedUrl: string; sourceLabel: string; category: string; categoryId: string | null }
+type Source = { id: string; name: string; feedUrl: string; sourceLabel: string; category: string; categoryId: string | null; countryCode: string }
 type CmsCategory = { id: string; name: string }
-type Article = { title: string; url: string; body: string; publishedAt?: string }
+type Article = { title: string; url: string; body: string; publishedAt?: string; extractedFromArticle?: boolean }
 type Counts = { processed: number; created: number; skipped: number; failed: number }
 let scheduler: NodeJS.Timeout | undefined
 let workerPoller: NodeJS.Timeout | undefined
 
 type ScheduleSettings = { enabled: boolean; lastScheduledAt: Date | null; intervalMinutes: number; workingStartHour?: number; workingEndHour?: number }
+
+async function activeSources(): Promise<Source[]> {
+  const sources = await prisma.newsBotSource.findMany({ where: { isEnabled: true }, select: { id: true, name: true, feedUrl: true, sourceLabel: true, category: true, categoryId: true, countryCode: true } })
+  const settings = await countrySettings(sources.map(source => source.countryCode))
+  return sources.filter(source => settings.get(source.countryCode)?.retrievalEnabled !== false)
+}
 
 export function isWithinWorkingHours(settings: Pick<ScheduleSettings, 'workingStartHour' | 'workingEndHour'>, now = Date.now(), timeZone = config.NEWS_BOT_TIMEZONE) {
   const start = settings.workingStartHour ?? 0
@@ -106,24 +113,24 @@ async function logVisualAttempts(runId: string, source: Source, itemId: string, 
 }
 
 async function processArticle(source: Source, runId: string, article: Article, categories: CmsCategory[]): Promise<'created' | 'skipped'> {
-  const sourceUrl = canonicalUrl(article.url); const fingerprint = sourceFingerprint(article); let item: { id: string } | undefined
+  const sourceUrl = canonicalUrl(article.url); const fingerprint = sourceFingerprint(article); const retainedExcerpt = article.extractedFromArticle ? null : article.body.slice(0, 3000) || null; let item: { id: string } | undefined
   const existing = await prisma.newsBotItem.findFirst({ where: { OR: [{ sourceUrl }, { sourceFingerprint: fingerprint }] }, select: { id: true, status: true, sourceUrl: true, retryCount: true } })
   if (existing && isTerminalNewsBotItem(existing.status)) {
     await log(runId, NewsBotLogLevel.INFO, 'deduplicate', 'Skipped an article already completed by the bot.', { sourceUrl, matchedBy: existing.sourceUrl === sourceUrl ? 'canonical-url' : 'source-fingerprint' }, source.id)
     return 'skipped'
   }
   if (existing?.status === NewsBotItemStatus.FAILED) {
-    item = await prisma.newsBotItem.update({ where: { id: existing.id }, data: { runId, sourceId: source.id, status: NewsBotItemStatus.PENDING, error: null, sourceTitle: article.title, sourceExcerpt: article.body.slice(0, 3000) || null, sourcePublishedAt: sourceDate(article.publishedAt), sourceFingerprint: fingerprint }, select: { id: true } })
+    item = await prisma.newsBotItem.update({ where: { id: existing.id }, data: { runId, sourceId: source.id, status: NewsBotItemStatus.PENDING, error: null, sourceTitle: article.title, sourceExcerpt: retainedExcerpt, sourcePublishedAt: sourceDate(article.publishedAt), sourceFingerprint: fingerprint }, select: { id: true } })
     await log(runId, NewsBotLogLevel.WARN, 'article-retry', 'Retrying a previously failed source article.', { sourceUrl, retryCount: existing.retryCount }, source.id, item.id)
   } else if (existing) {
     await log(runId, NewsBotLogLevel.INFO, 'deduplicate', 'Skipped an article that is already being processed.', { sourceUrl }, source.id)
     return 'skipped'
   } else {
-    item = await prisma.newsBotItem.create({ data: { sourceId: source.id, runId, sourceUrl, sourceFingerprint: fingerprint, sourceTitle: article.title, sourceExcerpt: article.body.slice(0, 3000) || null, sourcePublishedAt: sourceDate(article.publishedAt), status: NewsBotItemStatus.PENDING }, select: { id: true } })
+    item = await prisma.newsBotItem.create({ data: { sourceId: source.id, runId, sourceUrl, sourceFingerprint: fingerprint, sourceTitle: article.title, sourceExcerpt: retainedExcerpt, sourcePublishedAt: sourceDate(article.publishedAt), status: NewsBotItemStatus.PENDING }, select: { id: true } })
     await log(runId, NewsBotLogLevel.INFO, 'article-discovered', 'Queued one source article for processing.', { sourceUrl, title: article.title, publishedAt: article.publishedAt, sourceTextCharacters: article.body.length }, source.id, item.id)
   }
   try {
-    if (!article.body || article.body.length < 200) throw new Error('Feed item does not provide enough source text for a rewrite')
+    if (!article.body || article.body.length < 200) throw new Error(`Insufficient source context after permitted article retrieval (${article.body?.length || 0} characters; minimum 200).`)
     await log(runId, NewsBotLogLevel.INFO, 'rewrite-started', `Creating Chinese and English rewrites with ${usesLocalAi() ? 'Ollama' : 'DeepSeek'}.`, { model: usesLocalAi() ? config.OLLAMA_MODEL : config.DEEPSEEK_MODEL }, source.id, item.id)
     const chinese = await rewriteArticle({ sourceName: source.sourceLabel, sourceUrl, title: article.title, body: article.body, language: 'zh-CN' })
     await log(runId, NewsBotLogLevel.INFO, 'rewrite-complete', 'Chinese-primary rewrite completed successfully.', { language: 'zh-CN', title: chinese.title, wordCount: wordCount(chinese.markdown) }, source.id, item.id)
@@ -172,7 +179,7 @@ async function processArticle(source: Source, runId: string, article: Article, c
     const chineseMarkdown = withCredit(insertInlineImages(chinese.markdown, inlineImages), source, sourceUrl, true)
     const englishMarkdown = english ? withCredit(english.markdown, source, sourceUrl, false) : null
     const visualNeedsReview = usedFallbackCover || !inlineImages.length
-    const content = await prisma.content.create({ data: { type: ContentType.POST, status: 'PUBLISHED', publishedAt: new Date(), title: chinese.title, slug: await uniqueSlug(chinese.title, english?.title ?? null, randomUUID().slice(0, 6)), excerpt: chinese.excerpt, category: category.name, categoryId: category.id || null, authorName: 'Editorial Desk', sourceLabel: source.sourceLabel, sourceUrl, markdown: chineseMarkdown, html: renderMarkdown(chineseMarkdown), wordCount: wordCount(chineseMarkdown), tags: chinese.tags, seoTitle: chinese.seoTitle, seoDescription: chinese.seoDescription, coverMediaId: cover.id, visualNeedsReview, translations: english && englishMarkdown ? { create: { language: ContentLanguage.EN, title: english.title, excerpt: english.excerpt, markdown: englishMarkdown, html: renderMarkdown(englishMarkdown), wordCount: wordCount(englishMarkdown), seoTitle: english.seoTitle, seoDescription: english.seoDescription } } : undefined } })
+    const content = await prisma.content.create({ data: { type: ContentType.POST, status: 'PUBLISHED', publishedAt: new Date(), title: chinese.title, slug: await uniqueSlug(chinese.title, english?.title ?? null, randomUUID().slice(0, 6)), excerpt: chinese.excerpt, category: category.name, categoryId: category.id || null, authorName: 'Editorial Desk', sourceLabel: source.sourceLabel, sourceUrl, sourceCountryCode: source.countryCode, markdown: chineseMarkdown, html: renderMarkdown(chineseMarkdown), wordCount: wordCount(chineseMarkdown), tags: chinese.tags, seoTitle: chinese.seoTitle, seoDescription: chinese.seoDescription, coverMediaId: cover.id, visualNeedsReview, translations: english && englishMarkdown ? { create: { language: ContentLanguage.EN, title: english.title, excerpt: english.excerpt, markdown: englishMarkdown, html: renderMarkdown(englishMarkdown), wordCount: wordCount(englishMarkdown), seoTitle: english.seoTitle, seoDescription: english.seoDescription } } : undefined } })
     await prisma.newsBotItem.update({ where: { id: item.id }, data: { status: NewsBotItemStatus.CREATED, contentId: content.id, error: null } })
     void pingIndexNow([`/article/${content.slug}`, '/'])
     await log(runId, visualNeedsReview ? NewsBotLogLevel.WARN : NewsBotLogLevel.INFO, 'draft-created', 'Created and published a Chinese-primary CMS post.', { contentId: content.id, slug: content.slug, hasCover: Boolean(cover), inlineImageCount: inlineImages.length, englishTranslation: Boolean(english), visualNeedsReview }, source.id, item.id)
@@ -212,8 +219,8 @@ async function processSource(source: Source, runId: string, articleLimit: number
     let article = candidate
     try {
       const enhanced = await enhanceArticleBody(candidate); article = enhanced
-      if (enhanced.extractedFromArticle) await log(runId, NewsBotLogLevel.INFO, 'article-body-extracted', 'Fetched full article-page text instead of relying on the feed summary.', { sourceTextCharacters: enhanced.body.length, extraction: new URL(candidate.url).hostname.includes('says.com') ? 'says-story-content' : 'generic-article' }, source.id)
-    } catch (error) { await log(runId, NewsBotLogLevel.WARN, 'article-body-fallback', error instanceof Error ? error.message : 'Could not fetch article body; using feed content.', { sourceUrl: candidate.url }, source.id) }
+      if (enhanced.extractedFromArticle) await log(runId, NewsBotLogLevel.INFO, 'article-body-extracted', 'Fetched readable article-page context instead of relying on the feed summary.', { sourceTextCharacters: enhanced.body.length, extraction: enhanced.extraction, finalUrl: enhanced.finalUrl }, source.id)
+    } catch (error) { await log(runId, NewsBotLogLevel.WARN, 'article-context-unavailable', error instanceof Error ? error.message : 'Could not retrieve article context; using feed content.', { sourceUrl: candidate.url, diagnostic: (error as any)?.diagnostic || 'request-failed', ...((error as any)?.context || {}) }, source.id) }
     counts.processed++
     try { const result = await processArticle(source, runId, article, categories); result === 'created' ? counts.created++ : counts.skipped++ } catch { counts.failed++ }
     // Keep the live run dashboard truthful while a long rewrite is still in progress.
@@ -228,7 +235,7 @@ export async function queueScheduledNewsBotRun(options: { force?: boolean } = {}
   const active = await prisma.newsBotRun.findFirst({ where: { status: { in: [NewsBotRunStatus.QUEUED, NewsBotRunStatus.RUNNING] } }, select: { id: true } })
   if (active) return null
   if (!options.force && !shouldStartRun(settings)) return null
-  const now = new Date(); const sourceCount = await prisma.newsBotSource.count({ where: { isEnabled: true } })
+  const now = new Date(); const sourceCount = (await activeSources()).length
   const run = await prisma.$transaction(async tx => {
     const stillActive = await tx.newsBotRun.findFirst({ where: { status: { in: [NewsBotRunStatus.QUEUED, NewsBotRunStatus.RUNNING] } }, select: { id: true } })
     if (stillActive) return null
@@ -256,7 +263,7 @@ async function claimQueuedRun() {
 
 export async function runNewsBotOnce() {
   const candidate = await claimQueuedRun(); if (!candidate) return false
-  const sources = await prisma.newsBotSource.findMany({ where: { isEnabled: true }, select: { id: true, name: true, feedUrl: true, sourceLabel: true, category: true, categoryId: true } })
+  const sources = await activeSources()
   const categories = await prisma.category.findMany({ where: { isActive: true }, select: { id: true, name: true }, orderBy: { name: 'asc' } })
   const counts: Counts = { processed: 0, created: 0, skipped: 0, failed: 0 }
   await log(candidate.run.id, NewsBotLogLevel.INFO, 'run-started', 'News bot run started.', { trigger: candidate.run.trigger, enabledSources: sources.length, aiProvider: usesLocalAi() ? 'ollama' : 'deepseek', model: usesLocalAi() ? config.OLLAMA_MODEL : config.DEEPSEEK_MODEL })

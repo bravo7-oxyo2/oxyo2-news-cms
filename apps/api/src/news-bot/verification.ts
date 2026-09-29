@@ -41,12 +41,12 @@ export function findFeedUrls(html: string, homepage: string) {
   return [...new Set([...embedded.map(url => canonicalUrl(url, homepage)), ...conventional.map(path => canonicalUrl(path, homepage))])]
 }
 
-export function robotsAllows(robots: string, path: string) {
+export function robotsAllows(robots: string, path: string, userAgent = 'paperleafnewsbotverifier') {
   const lines = robots.split(/\r?\n/).map(line => line.replace(/#.*/, '').trim())
   let applies = false; const disallowed: string[] = []
   for (const line of lines) {
     const [rawKey, ...rest] = line.split(':'); const key = rawKey?.trim().toLowerCase(); const value = rest.join(':').trim()
-    if (key === 'user-agent') { applies = value === '*' || /paperleafnewsbotverifier/i.test(value); continue }
+    if (key === 'user-agent') { applies = value === '*' || value.toLowerCase() === userAgent.toLowerCase(); continue }
     if (applies && key === 'disallow' && value) disallowed.push(value)
   }
   return !disallowed.some(rule => rule !== '/' && path.startsWith(rule)) && !disallowed.includes('/')

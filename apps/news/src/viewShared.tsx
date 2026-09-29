@@ -156,8 +156,10 @@ export function HeroImageStack({ posts }: { posts: Post[] }) {
 
 export function ArticleMeta({ post, compact = false }: { post: Post; compact?: boolean }) {
   const { locale, t } = useLocale()
-  if (compact) return <div className="card-footer"><span className="footer-author">{post.authorName || t('editorialDesk')}</span><span className="footer-date"><CalendarDays />{formatDate(post.publishedAt ?? post.createdAt, locale)}</span><span className="footer-read"><Clock />{readingTime(post.wordCount, locale)}</span>{post.sourceLabel && (post.sourceUrl ? <a className="footer-source" href={post.sourceUrl} target="_blank" rel="noreferrer noopener">{t('source')} {post.sourceLabel}</a> : <span className="footer-source">{post.sourceLabel}</span>)}</div>
-  return <p className="meta"><span>{post.authorName || t('editorialDesk')}</span><span><CalendarDays />{formatDate(post.publishedAt ?? post.createdAt, locale)}</span><span><Clock />{readingTime(post.wordCount, locale)}</span>{post.sourceLabel && (post.sourceUrl ? <a href={post.sourceUrl} target="_blank" rel="noreferrer noopener">{t('source')} {post.sourceLabel}</a> : <span>{post.sourceLabel}</span>)}</p>
+  const countryName = post.sourceCountryCode ? new Intl.DisplayNames([locale], { type: 'region' }).of(post.sourceCountryCode) || post.sourceCountryCode : null
+  const country = countryName ? <span className="country-origin" title={locale === 'zh-CN' ? '新闻来源国家' : 'News origin country'}>{countryName}</span> : null
+  if (compact) return <div className="card-footer"><span className="footer-author">{post.authorName || t('editorialDesk')}</span><span className="footer-date"><CalendarDays />{formatDate(post.publishedAt ?? post.createdAt, locale)}</span><span className="footer-read"><Clock />{readingTime(post.wordCount, locale)}</span>{country}{post.sourceLabel && (post.sourceUrl ? <a className="footer-source" href={post.sourceUrl} target="_blank" rel="noreferrer noopener">{t('source')} {post.sourceLabel}</a> : <span className="footer-source">{post.sourceLabel}</span>)}</div>
+  return <p className="meta"><span>{post.authorName || t('editorialDesk')}</span><span><CalendarDays />{formatDate(post.publishedAt ?? post.createdAt, locale)}</span><span><Clock />{readingTime(post.wordCount, locale)}</span>{country}{post.sourceLabel && (post.sourceUrl ? <a href={post.sourceUrl} target="_blank" rel="noreferrer noopener">{t('source')} {post.sourceLabel}</a> : <span>{post.sourceLabel}</span>)}</p>
 }
 
 export function AboutHighlights() {

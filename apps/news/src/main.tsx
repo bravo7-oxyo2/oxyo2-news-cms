@@ -1,8 +1,8 @@
 import React, { Suspense } from 'react'
 import { createRoot } from 'react-dom/client'
-import { BrowserRouter, Link, Route, Routes } from 'react-router-dom'
+import { BrowserRouter, Link, Route, Routes, useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 import { ArrowRight, Search } from 'lucide-react'
-import { fetchCategories, fetchPosts, type Category, type Post } from './newsApi'
+import { fetchCategories, fetchCountries, fetchPosts, type Category, type Post } from './newsApi'
 import { categorySlug, resolveMediaUrl } from './utils'
 import { ArticleMeta, ErrorView, HeroImageStack, JsonLd, MiniCard, Seo, absoluteUrl, siteName, useAsync } from './viewShared'
 import { LocaleProvider, categoryLabel, useLocale } from './locale'
@@ -30,16 +30,26 @@ function Layout() {
   const bootstrap = bootstrapForCurrentLocale()
   const { data } = useAsync(fetchCategories, [], bootstrap?.categories ? { data: bootstrap.categories } : undefined)
   const categories = data?.data?.length ? data.data : fallbackCategories
-  return <><header className="site-header"><Link to={link('/')} className="logo" aria-label={`${siteName} ${t('home')}`}>{siteName}<span>.</span></Link><nav aria-label="Primary navigation">{categories.map(category => <Link key={category.id} to={link(`/category/${category.slug}`)}>{categoryLabel(category, locale)}</Link>)}</nav><div className="header-actions"><form className="top-search" action={link('/search')} role="search"><Search /><input name="q" aria-label={t('searchNews')} placeholder={t('search')} /><button>{t('go')}</button></form><div className="language-switch global-language-switch" aria-label={t('language')}><button className={locale === 'zh-CN' ? 'active' : ''} onClick={() => setLocale('zh-CN')}>中文</button><button className={locale === 'en' ? 'active' : ''} onClick={() => setLocale('en')}>EN</button></div></div></header><Suspense fallback={<RouteSkeleton />}><Routes><Route path="/" element={<Home categories={categories} />} /><Route path="/article/:slug" element={<ArticlePage />} /><Route path="/category/:category" element={<CategoryPage categories={categories} />} /><Route path="/search" element={<SearchPage />} /><Route path="/page/:slug" element={<StaticPage />} /><Route path="*" element={<NotFound />} /></Routes></Suspense><Footer /></>
+  return <><header className="site-header"><Link to={link('/')} className="logo" aria-label={`${siteName} ${t('home')}`}>{siteName}<span>.</span></Link><nav aria-label="Primary navigation">{categories.map(category => <Link key={category.id} to={link(`/category/${category.slug}`)}>{categoryLabel(category, locale)}</Link>)}</nav><div className="header-actions"><form className="top-search" action={link('/search')} role="search"><Search /><input name="q" aria-label={t('searchNews')} placeholder={t('search')} /><button>{t('go')}</button></form><div className="language-switch global-language-switch" aria-label={t('language')}><button className={locale === 'zh-CN' ? 'active' : ''} onClick={() => setLocale('zh-CN')}>中文</button><button className={locale === 'en' ? 'active' : ''} onClick={() => setLocale('en')}>EN</button></div></div></header><CountrySelector /><Suspense fallback={<RouteSkeleton />}><Routes><Route path="/" element={<Home categories={categories} />} /><Route path="/article/:slug" element={<ArticlePage />} /><Route path="/category/:category" element={<CategoryPage categories={categories} />} /><Route path="/search" element={<SearchPage />} /><Route path="/page/:slug" element={<StaticPage />} /><Route path="*" element={<NotFound />} /></Routes></Suspense><Footer /></>
+}
+
+function CountrySelector() {
+  const { locale } = useLocale(); const location = useLocation(); const navigate = useNavigate(); const [params] = useSearchParams()
+  const { data } = useAsync(fetchCountries, [])
+  const config = data?.data
+  if (!config?.countries.length) return null
+  const selected = params.get('country')?.toUpperCase() || config.defaultCountryCode
+  const choose = (code: string) => { const next = new URLSearchParams(location.search); next.delete('page'); if (code === config.defaultCountryCode) next.delete('country'); else next.set('country', code.toLowerCase()); navigate(`${location.pathname}${next.size ? `?${next}` : ''}`) }
+  return <nav className="country-switcher" aria-label={locale === 'zh-CN' ? '新闻来源国家' : 'News origin country'}><button className={selected === 'ALL' ? 'active' : ''} onClick={() => choose('all')}>{locale === 'zh-CN' ? '全部' : 'All'}</button>{config.countries.map(country => <button key={country.code} className={selected === country.code ? 'active' : ''} onClick={() => choose(country.code)}>{locale === 'zh-CN' ? country.nameZh : country.name}</button>)}</nav>
 }
 
 function Home({ categories }: { categories: Category[] }) {
   const { locale, link, t } = useLocale()
-  const bootstrap = bootstrapForCurrentLocale()
+  const bootstrap = bootstrapForCurrentLocale(); const [params] = useSearchParams(); const country = params.get('country') || undefined
   const { data, loading, error } = useAsync(async () => {
-    const [featured, latest] = await Promise.all([fetchPosts({ featured: true, limit: 6, lang: locale }), fetchPosts({ limit: 12, lang: locale })])
+    const [featured, latest] = await Promise.all([fetchPosts({ featured: true, limit: 6, lang: locale, country }), fetchPosts({ limit: 12, lang: locale, country })])
     return { featured: featured.data, latest: latest.data }
-  }, [locale], bootstrap?.home)
+  }, [locale, country], bootstrap?.home)
   const [previewIndex, setPreviewIndex] = React.useState(0)
   const [carouselPaused, setCarouselPaused] = React.useState(false)
   const posts = data?.latest ?? []

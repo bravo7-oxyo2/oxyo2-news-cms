@@ -190,6 +190,32 @@ export function inspectionBaseUrl(siteUrl: string) {
   try { return new URL(siteUrl).toString().replace(/\/$/, '') } catch { throw new SearchConsoleConfigurationError('The selected URL-prefix property is invalid for URL inspection.') }
 }
 
+export function defaultSearchConsoleProperty(properties: Array<{ siteUrl?: string | null }>, publicBaseUrl: string) {
+  let hostname: string
+  try { hostname = new URL(publicBaseUrl).hostname.toLowerCase() } catch { return undefined }
+  const domainProperty = `sc-domain:${hostname}`
+  const available = properties.map(property => property.siteUrl ?? '').filter(Boolean)
+  if (available.includes(domainProperty)) return domainProperty
+  const matchingPrefix = available.find(siteUrl => {
+    try {
+      const property = new URL(siteUrl)
+      return property.protocol === 'https:' && property.hostname.toLowerCase() === hostname && property.pathname === '/'
+    } catch { return false }
+  })
+  return matchingPrefix || undefined
+}
+
+async function ensureSelectedProperty(client: ReturnType<typeof oauthClient>, connection: StoredConnection): Promise<StoredConnection & { siteUrl: string }> {
+  if (connection.siteUrl) return connection as StoredConnection & { siteUrl: string }
+  const response = await google.webmasters({ version: 'v3', auth: client }).sites.list()
+  const siteUrl = defaultSearchConsoleProperty(response.data.siteEntry ?? [], config.PUBLIC_BASE_URL)
+  if (!siteUrl) throw new SearchConsoleConfigurationError('No authorized Search Console property matches the configured public site. Select a property in Search Insights.')
+  const selected = { ...connection, siteUrl }
+  await writeConnection(selected)
+  clearReportCache()
+  return selected
+}
+
 async function priorityUrls(base: string) {
   const [categories, posts] = await Promise.all([
     prisma.category.findMany({ where: { isActive: true }, orderBy: { sortOrder: 'asc' }, select: { slug: true } }),
@@ -204,8 +230,8 @@ function errorMessage(error: unknown) {
 
 export async function getSearchConsoleReport(input: { startDate?: unknown; endDate?: unknown } = {}): Promise<SearchConsoleReport> {
   const range = reportRange(input)
-  const { client, connection } = await authorizedClient()
-  if (!connection.siteUrl) throw new SearchConsoleConfigurationError('Select a Search Console property before loading insights.')
+  const { client, connection: storedConnection } = await authorizedClient()
+  const connection = await ensureSelectedProperty(client, storedConnection)
   const cacheKey = `${connection.siteUrl}:${range.startDate}:${range.endDate}`
   const cached = reportCache.get(cacheKey)
   if (cached && cached.expiresAt > Date.now()) return cached.report

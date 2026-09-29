@@ -3,15 +3,16 @@ import { NewsBotRunStatus, prisma } from '@cms/database'
 import { requireAdmin } from '../auth.js'
 import { config } from '../config.js'
 import { isWithinWorkingHours, queueScheduledNewsBotRun } from '../news-bot/worker.js'
+import { listCountries, normalizeCountryCode } from '../news-bot/countries.js'
 
-const sourceSelect = { id: true, name: true, feedUrl: true, sourceLabel: true, category: true, categoryId: true, credentialEnvKey: true, isEnabled: true, createdAt: true, updatedAt: true }
+const sourceSelect = { id: true, name: true, feedUrl: true, sourceLabel: true, category: true, categoryId: true, countryCode: true, credentialEnvKey: true, isEnabled: true, createdAt: true, updatedAt: true }
 const settingSelect = { id: true, enabled: true, intervalMinutes: true, articleLimit: true, workingStartHour: true, workingEndHour: true, lastRunAt: true, lastScheduledAt: true, createdAt: true, updatedAt: true }
 const presentSettings = (settings: { id: string; enabled: boolean; intervalMinutes: number; articleLimit: number | null; workingStartHour: number; workingEndHour: number; lastRunAt: Date | null; lastScheduledAt: Date | null; createdAt: Date; updatedAt: Date }) => ({ ...settings, timeZone: config.NEWS_BOT_TIMEZONE, withinWorkingHours: isWithinWorkingHours(settings) })
 const sourceData = (body: any) => {
   const feedUrl = String(body.feedUrl ?? '').trim(); const parsed = new URL(feedUrl)
   if (parsed.protocol !== 'https:') throw new Error('Feed URL must use HTTPS')
   const name = String(body.name ?? '').trim(); if (!name) throw new Error('Source name is required')
-  return { name, feedUrl: parsed.toString(), sourceLabel: String(body.sourceLabel ?? name).trim() || name, category: String(body.category ?? 'General').trim() || 'General', categoryId: body.categoryId ? String(body.categoryId) : null, credentialEnvKey: body.credentialEnvKey ? String(body.credentialEnvKey).trim() : null, isEnabled: Boolean(body.isEnabled) }
+  return { name, feedUrl: parsed.toString(), sourceLabel: String(body.sourceLabel ?? name).trim() || name, category: String(body.category ?? 'General').trim() || 'General', categoryId: body.categoryId ? String(body.categoryId) : null, countryCode: normalizeCountryCode(body.countryCode || 'MY'), credentialEnvKey: body.credentialEnvKey ? String(body.credentialEnvKey).trim() : null, isEnabled: Boolean(body.isEnabled) }
 }
 
 export async function newsBotRoutes(app: FastifyInstance) {
@@ -25,6 +26,22 @@ export async function newsBotRoutes(app: FastifyInstance) {
     return { data: presentSettings(await prisma.newsBotSettings.upsert({ where: { id: 'default' }, update: { enabled: Boolean(body.enabled), intervalMinutes, articleLimit, workingStartHour, workingEndHour }, create: { id: 'default', enabled: Boolean(body.enabled), intervalMinutes, articleLimit, workingStartHour, workingEndHour }, select: settingSelect })) }
   } catch (error) { return reply.code(400).send({ error: { code: 'INVALID_BOT_SETTINGS', message: error instanceof Error ? error.message : 'Invalid settings' } }) } })
   app.get('/sources', async () => ({ data: await prisma.newsBotSource.findMany({ select: sourceSelect, orderBy: { name: 'asc' } }) }))
+  app.get('/countries', async () => ({ data: await listCountries() }))
+  app.patch('/countries/:code', async (req, reply) => { try {
+    const code = normalizeCountryCode((req.params as any).code)
+    const body = req.body as any
+    const existing = await prisma.newsBotCountry.findUnique({ where: { code } })
+    const displayEnabled = body.displayEnabled === undefined ? (existing?.displayEnabled ?? code === 'MY') : Boolean(body.displayEnabled)
+    const retrievalEnabled = body.retrievalEnabled === undefined ? (existing?.retrievalEnabled ?? code === 'MY') : Boolean(body.retrievalEnabled)
+    const wantsDefault = body.isDefault === true
+    if ((existing?.isDefault || wantsDefault) && !displayEnabled) throw new Error('The default reader country must remain visible. Choose another default before hiding it.')
+    if ((existing?.isDefault || wantsDefault) && !retrievalEnabled) throw new Error('The default reader country must remain enabled for retrieval. Choose another default before pausing it.')
+    const country = await prisma.$transaction(async tx => {
+      if (wantsDefault) await tx.newsBotCountry.updateMany({ where: { isDefault: true }, data: { isDefault: false } })
+      return tx.newsBotCountry.upsert({ where: { code }, create: { code, retrievalEnabled, displayEnabled, isDefault: wantsDefault }, update: { ...(body.retrievalEnabled === undefined ? {} : { retrievalEnabled }), ...(body.displayEnabled === undefined ? {} : { displayEnabled }), ...(wantsDefault ? { isDefault: true } : {}) } })
+    })
+    return { data: country }
+  } catch (error) { return reply.code(400).send({ error: { code: 'INVALID_COUNTRY_SETTING', message: error instanceof Error ? error.message : 'Invalid country setting' } }) } })
   app.post('/sources', async (req, reply) => { try { return reply.code(201).send({ data: await prisma.newsBotSource.create({ data: sourceData(req.body), select: sourceSelect }) }) } catch (error) { return reply.code(400).send({ error: { code: 'INVALID_BOT_SOURCE', message: error instanceof Error ? error.message : 'Invalid source' } }) } })
   app.put('/sources/:id', async (req, reply) => { try { return { data: await prisma.newsBotSource.update({ where: { id: (req.params as any).id }, data: sourceData(req.body), select: sourceSelect }) } } catch (error) { return reply.code(400).send({ error: { code: 'INVALID_BOT_SOURCE', message: error instanceof Error ? error.message : 'Invalid source' } }) } })
   app.delete('/sources/:id', async (_req, reply) => { try { await prisma.newsBotSource.delete({ where: { id: (_req.params as any).id } }); return reply.code(204).send() } catch { return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'Source not found' } }) } })

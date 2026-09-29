@@ -32,7 +32,13 @@ export function LocaleProvider({ children }: { children: React.ReactNode }) {
   const value = React.useMemo<LocaleContextValue>(() => ({
     locale,
     t: (key, values = {}) => Object.entries(values).reduce<string>((text, [name, replacement]) => text.replaceAll(`{${name}}`, String(replacement)), String(copy[locale][key])),
-    link: path => withLocale(path, locale),
+    link: path => {
+      const [pathname, query = ''] = path.split('?')
+      const params = new URLSearchParams(query)
+      const country = new URLSearchParams(location.search).get('country')
+      if (country && !params.has('country')) params.set('country', country)
+      return withLocale(`${pathname}${params.size ? `?${params}` : ''}`, locale)
+    },
     setLocale: nextLocale => navigate(withLocale(`${location.pathname}${location.search}`, nextLocale))
   }), [locale, location.pathname, location.search, navigate])
   React.useEffect(() => { document.documentElement.lang = locale }, [locale])

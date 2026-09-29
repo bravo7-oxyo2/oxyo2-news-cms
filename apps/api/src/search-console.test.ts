@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { inspectionBaseUrl, reportRange, searchConsoleConstants, sitemapMetric } from './search-console.js'
+import { defaultSearchConsoleProperty, inspectionBaseUrl, reportRange, searchConsoleConstants, sitemapMetric } from './search-console.js'
 
 describe('Search Console report ranges', () => {
   it('accepts a valid requested date range', () => {
@@ -21,5 +21,17 @@ describe('Search Console report ranges', () => {
   it('derives inspection URLs from the selected GSC property, never localhost configuration', () => {
     expect(inspectionBaseUrl('sc-domain:thepaperleaf.com')).toBe('https://thepaperleaf.com')
     expect(inspectionBaseUrl('https://www.thepaperleaf.com/')).toBe('https://www.thepaperleaf.com')
+  })
+  it('prefers the authorized domain property for the configured public hostname', () => {
+    expect(defaultSearchConsoleProperty([
+      { siteUrl: 'https://thepaperleaf.com/' },
+      { siteUrl: 'sc-domain:thepaperleaf.com' },
+    ], 'https://thepaperleaf.com')).toBe('sc-domain:thepaperleaf.com')
+  })
+  it('falls back to an authorized HTTPS URL-prefix property for the configured hostname', () => {
+    expect(defaultSearchConsoleProperty([{ siteUrl: 'https://thepaperleaf.com/' }], 'https://thepaperleaf.com')).toBe('https://thepaperleaf.com/')
+  })
+  it('does not select an unrelated or malformed property', () => {
+    expect(defaultSearchConsoleProperty([{ siteUrl: 'https://example.com/' }, { siteUrl: 'not a URL' }], 'https://thepaperleaf.com')).toBeUndefined()
   })
 })

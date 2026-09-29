@@ -69,6 +69,7 @@ model Content {
   authorName String @default("Editorial Desk")
   sourceLabel String?
   sourceUrl String?
+  sourceCountryCode String @default("MY") @db.Char(2)
   isFeatured Boolean @default(false)
   categoryId String?
   categoryRef Category? @relation("ContentCategory", fields: [categoryId], references: [id], onDelete: SetNull)
@@ -92,6 +93,7 @@ model Content {
   @@index([type, category, status, publishedAt])
   @@index([type, categoryId, status, publishedAt])
   @@index([type, isFeatured, status, publishedAt])
+  @@index([type, sourceCountryCode, status, publishedAt])
   @@index([updatedAt])
 }
 
@@ -133,6 +135,7 @@ model NewsBotSource {
   sourceLabel String
   category String @default("General")
   categoryId String?
+  countryCode String @default("MY") @db.Char(2)
   credentialEnvKey String?
   allowsSourceImageReference Boolean @default(false)
   sourceImagePermissionUrl String?
@@ -142,6 +145,22 @@ model NewsBotSource {
   items NewsBotItem[]
   logs NewsBotLog[]
   @@index([isEnabled])
+  @@index([countryCode, isEnabled])
+}
+
+/// Country settings are sparse: countries without a row use the safe defaults
+/// (enabled for retrieval and reader listings). This keeps the ISO directory
+/// admin-managed without pre-seeding hundreds of mutable records.
+model NewsBotCountry {
+  code String @id @db.Char(2)
+  retrievalEnabled Boolean @default(false)
+  displayEnabled Boolean @default(false)
+  isDefault Boolean @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  @@index([retrievalEnabled])
+  @@index([displayEnabled])
+  @@index([isDefault])
 }
 
 model NewsBotRun {

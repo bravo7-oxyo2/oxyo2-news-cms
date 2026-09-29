@@ -2,12 +2,12 @@ import type { FastifyInstance, FastifyReply } from 'fastify'
 import { readFileSync } from 'node:fs'
 import { ContentType, prisma } from '@cms/database'
 import { config } from '../config.js'
-import { localizeContent, publicContentWhere } from './content.js'
+import { localizeContent, publicPostListingWhere } from './content.js'
 
 type Locale = 'zh-CN' | 'en'
 const siteName = 'ThePaperLeaf'
 const listTranslationSelect = { language: true, title: true, excerpt: true, seoTitle: true, seoDescription: true }
-const listSelect = { id: true, title: true, slug: true, excerpt: true, category: true, categoryRef: { select: { id: true, name: true, nameZh: true, slug: true } }, authorName: true, sourceLabel: true, sourceUrl: true, wordCount: true, seoTitle: true, seoDescription: true, publishedAt: true, createdAt: true, updatedAt: true, tags: true, coverMedia: { select: { url: true, altText: true, width: true, height: true } }, translations: { select: listTranslationSelect } }
+const listSelect = { id: true, title: true, slug: true, excerpt: true, category: true, categoryRef: { select: { id: true, name: true, nameZh: true, slug: true } }, authorName: true, sourceLabel: true, sourceUrl: true, sourceCountryCode: true, wordCount: true, seoTitle: true, seoDescription: true, publishedAt: true, createdAt: true, updatedAt: true, tags: true, coverMedia: { select: { url: true, altText: true, width: true, height: true } }, translations: { select: listTranslationSelect } }
 const articleSelect = { ...listSelect, status: true, html: true, translations: { select: { ...listTranslationSelect, html: true, wordCount: true } } }
 const categorySelect = { id: true, name: true, nameZh: true, slug: true, description: true, descriptionZh: true }
 const defaultChineseCategories: Record<string, string> = { business: '商业', technology: '科技', culture: '文化', world: '国际', science: '科学', sport: '体育', sports: '体育', general: '综合', lifestyle: '生活', entertainment: '娱乐', food: '美食', travel: '旅游', finance: '财经', politics: '政治', health: '健康' }
@@ -18,6 +18,7 @@ const absolute = (path: string) => new URL(path, config.PUBLIC_BASE_URL).toStrin
 const withLang = (path: string, locale: Locale) => locale === 'en' ? `${path}${path.includes('?') ? '&' : '?'}lang=en` : path
 const categoryLabel = (category: { name: string; nameZh?: string | null; slug?: string }, locale: Locale) => locale !== 'zh-CN' ? category.name : category.nameZh?.trim() || defaultChineseCategories[(category.slug || category.name).trim().toLowerCase().replace(/\s+/g, '-')] || category.name
 const formatDate = (value: Date | string, locale: Locale) => new Intl.DateTimeFormat(locale, { month: 'short', day: 'numeric', year: 'numeric', timeZone: config.NEWS_BOT_TIMEZONE }).format(new Date(value))
+const countryLabel = (code: string, locale: Locale) => new Intl.DisplayNames([locale], { type: 'region' }).of(code) || code
 
 export function proxyExternalImageUrl(url: string) {
   try {
@@ -138,14 +139,14 @@ const siteFooter = (locale: Locale) => `<footer><b>${siteName}<span>.</span></b>
 
 function postMeta(post: any, locale: Locale) {
   const date = post.publishedAt || post.createdAt
-  const source = post.sourceLabel ? (post.sourceUrl ? `<a href="${escapeHtml(post.sourceUrl)}" target="_blank" rel="noreferrer noopener">${locale === 'zh-CN' ? '来源：' : 'Source: '}${escapeHtml(post.sourceLabel)}</a>` : `<span>${escapeHtml(post.sourceLabel)}</span>`) : ''
+  const source = `${post.sourceCountryCode ? `<span class="country-origin">${escapeHtml(countryLabel(post.sourceCountryCode, locale))}</span>` : ''}${post.sourceLabel ? (post.sourceUrl ? `<a href="${escapeHtml(post.sourceUrl)}" target="_blank" rel="noreferrer noopener">${locale === 'zh-CN' ? '来源：' : 'Source: '}${escapeHtml(post.sourceLabel)}</a>` : `<span>${escapeHtml(post.sourceLabel)}</span>`) : ''}`
   return `<p class="meta"><span>${escapeHtml(post.authorName || (locale === 'zh-CN' ? '编辑部' : 'Editorial Desk'))}</span><time datetime="${new Date(date).toISOString()}">${formatDate(date, locale)}</time>${source}</p>`
 }
 
 function postListItem(post: any, locale: Locale) {
   const image = responsiveImage(post.coverMedia, { alt: post.coverMedia?.altText || post.title, width: 700, height: 460, sizes: '(max-width: 600px) calc(100vw - 42px), 300px' })
   const date = post.publishedAt || post.createdAt
-  const source = post.sourceLabel ? (post.sourceUrl ? `<a class="footer-source" href="${escapeHtml(post.sourceUrl)}" target="_blank" rel="noreferrer noopener">${locale === 'zh-CN' ? '来源：' : 'Source: '}${escapeHtml(post.sourceLabel)}</a>` : `<span class="footer-source">${escapeHtml(post.sourceLabel)}</span>`) : ''
+  const source = `${post.sourceCountryCode ? `<span class="country-origin">${escapeHtml(countryLabel(post.sourceCountryCode, locale))}</span>` : ''}${post.sourceLabel ? (post.sourceUrl ? `<a class="footer-source" href="${escapeHtml(post.sourceUrl)}" target="_blank" rel="noreferrer noopener">${locale === 'zh-CN' ? '来源：' : 'Source: '}${escapeHtml(post.sourceLabel)}</a>` : `<span class="footer-source">${escapeHtml(post.sourceLabel)}</span>`) : ''}`
   return `<a class="card" href="${escapeHtml(withLang(`/article/${post.slug}`, locale))}"><div class="article-image" style="--image-ratio:${post.coverMedia?.width || 700} / ${post.coverMedia?.height || 460}">${image}</div><span class="kicker">${escapeHtml(post.categoryRef ? categoryLabel(post.categoryRef, locale) : post.category || 'General')}</span><h3>${escapeHtml(post.title)}</h3><p>${escapeHtml(post.excerpt || '')}</p><div class="card-footer"><span class="footer-author">${escapeHtml(post.authorName || (locale === 'zh-CN' ? '编辑部' : 'Editorial Desk'))}</span><span class="footer-date"><time datetime="${new Date(date).toISOString()}">${formatDate(date, locale)}</time></span>${source}</div></a>`
 }
 
@@ -190,20 +191,20 @@ async function activeCategories() {
 const localeFrom = (query: Record<string, string>): Locale => query.lang === 'en' ? 'en' : 'zh-CN'
 
 async function publishedPosts(q: Record<string, string>, locale: Locale, limit: number, select: object = listSelect) {
-  const items = await prisma.content.findMany({ where: publicContentWhere(ContentType.POST, q, new Date()) as any, select: select as any, orderBy: [{ isFeatured: 'desc' }, { publishedAt: 'desc' }] as any, take: limit })
+  const items = await prisma.content.findMany({ where: await publicPostListingWhere(q, new Date()) as any, select: select as any, orderBy: [{ isFeatured: 'desc' }, { publishedAt: 'desc' }] as any, take: limit })
   return items.map(item => localizeContent(item, locale === 'en' ? 'en' : undefined))
 }
 
 async function relatedPosts(post: any, locale: Locale) {
   const categoryFilter = post.categoryRef?.slug || post.category
   if (!categoryFilter) return []
-  const where = { ...(publicContentWhere(ContentType.POST, { category: categoryFilter }, new Date()) as any), NOT: { slug: post.slug } }
+  const where = { ...(await publicPostListingWhere({ category: categoryFilter }, new Date()) as any), NOT: { slug: post.slug } }
   const items = await prisma.content.findMany({ where, select: listSelect as any, orderBy: [{ isFeatured: 'desc' }, { publishedAt: 'desc' }] as any, take: 4 })
   return items.map(item => localizeContent(item, locale === 'en' ? 'en' : undefined))
 }
 
 async function pagedPosts(q: Record<string, string>, locale: Locale, page: number, limit: number) {
-  const where = publicContentWhere(ContentType.POST, q, new Date()) as any
+  const where = await publicPostListingWhere(q, new Date()) as any
   const [items, total] = await prisma.$transaction([
     prisma.content.findMany({ where, select: listSelect as any, orderBy: [{ isFeatured: 'desc' }, { publishedAt: 'desc' }] as any, skip: (page - 1) * limit, take: limit }),
     prisma.content.count({ where })
@@ -224,8 +225,8 @@ function pagerHtml(basePath: string, page: number, pages: number, locale: Locale
 
 export async function prerenderRoutes(app: FastifyInstance) {
   app.get('/', async (req, reply) => {
-    const locale = localeFrom(req.query as Record<string, string>)
-    const [categories, posts] = await Promise.all([activeCategories(), publishedPosts({}, locale, 13)])
+    const query = req.query as Record<string, string>; const locale = localeFrom(query)
+    const [categories, posts] = await Promise.all([activeCategories(), publishedPosts(query, locale, 13)])
     const hero = posts[0]
     const rest = posts.slice(1)
     const canonical = absolute(withLang('/', locale))
@@ -272,7 +273,7 @@ export async function prerenderRoutes(app: FastifyInstance) {
     const category = categories.find(entry => entry.slug === slug || entry.name.toLowerCase() === slug.toLowerCase())
     if (!category) return notFound(reply, categories, locale)
     const page = pageFrom(req.query as Record<string, string>)
-    const { posts, pages, total } = await pagedPosts({ category: category.slug }, locale, page, 18)
+    const { posts, pages, total } = await pagedPosts({ category: category.slug, country: String((req.query as any).country || '') }, locale, page, 18)
     if (page > 1 && page > pages) return notFound(reply, categories, locale)
     const label = categoryLabel(category, locale)
     const path = `/category/${category.slug}`
@@ -280,7 +281,8 @@ export async function prerenderRoutes(app: FastifyInstance) {
     const pageSuffix = page > 1 ? (locale === 'zh-CN' ? ` — 第${page}页` : ` — Page ${page}`) : ''
     const breadcrumbItems: BreadcrumbItem[] = [{ name: locale === 'zh-CN' ? '首页' : 'Home', path: withLang('/', locale) }, { name: label, path: withLang(path, locale) }]
     const head = headBlock({ title: `${label}${pageSuffix} — ${siteName}`, description, canonical: absolute(withLang(pagedPath(path, page), locale)), locale, alternatePath: pagedPath(path, page), pagination: { basePath: path, page, pages }, jsonLd: [{ id: `category-${category.slug}`, data: { '@context': 'https://schema.org', '@type': 'CollectionPage', name: label, url: absolute(pagedPath(path, page)), description, inLanguage: locale, publisher: publisherJsonLd() } }, { id: `breadcrumb-category-${category.slug}`, data: breadcrumbJsonLd(breadcrumbItems) }] })
-    const body = `${siteHeader(categories, locale)}<main><section>${breadcrumbHtml(breadcrumbItems)}<h1>${escapeHtml(label)}${escapeHtml(pageSuffix)}</h1><p>${escapeHtml(description)}</p><div class="latest-grid">${posts.map(post => postListItem(post, locale)).join('')}</div>${pagerHtml(path, page, pages, locale)}</section></main>${siteFooter(locale)}`
+    const countrySuffix = String((req.query as any).country || '').trim(); const pagedBase = countrySuffix ? `${path}?country=${encodeURIComponent(countrySuffix)}` : path
+    const body = `${siteHeader(categories, locale)}<main><section>${breadcrumbHtml(breadcrumbItems)}<h1>${escapeHtml(label)}${escapeHtml(pageSuffix)}</h1><p>${escapeHtml(description)}</p><div class="latest-grid">${posts.map(post => postListItem(post, locale)).join('')}</div>${pagerHtml(pagedBase, page, pages, locale)}</section></main>${siteFooter(locale)}`
     return sendPage(reply, locale, head, body, 200, { path: req.url, locale, categories, listing: { data: posts, meta: { page, limit: 18, total, pages } } })
   })
 
@@ -311,8 +313,8 @@ export async function prerenderRoutes(app: FastifyInstance) {
     const locale = localeFrom(req.query as Record<string, string>)
     const query = String((req.query as any).q || '').trim().slice(0, 120)
     const page = pageFrom(req.query as Record<string, string>)
-    const [categories, { posts, pages, total }] = await Promise.all([activeCategories(), query ? pagedPosts({ search: query }, locale, page, 18) : Promise.resolve({ posts: [], pages: 1, total: 0 })])
-    const searchBase = query ? `/search?q=${encodeURIComponent(query)}` : '/search'
+    const [categories, { posts, pages, total }] = await Promise.all([activeCategories(), query ? pagedPosts({ search: query, country: String((req.query as any).country || '') }, locale, page, 18) : Promise.resolve({ posts: [], pages: 1, total: 0 })])
+    const country = String((req.query as any).country || '').trim(); const searchBase = query ? `/search?q=${encodeURIComponent(query)}${country ? `&country=${encodeURIComponent(country)}` : ''}` : '/search'
     const title = query ? (locale === 'zh-CN' ? `搜索：${query} — ${siteName}` : `Search: ${query} — ${siteName}`) : (locale === 'zh-CN' ? `搜索 — ${siteName}` : `Search — ${siteName}`)
     const head = headBlock({ title, description: locale === 'zh-CN' ? `ThePaperLeaf 上“${query}”的搜索结果。` : `Search results for ${query} on ${siteName}.`, canonical: absolute(withLang('/search', locale)), locale, noIndex: !query })
     const body = `${siteHeader(categories, locale)}<main><section><h1>${escapeHtml(title)}</h1><div class="latest-grid">${posts.map(post => postListItem(post, locale)).join('')}</div>${query ? pagerHtml(searchBase, page, pages, locale) : ''}</section></main>${siteFooter(locale)}`

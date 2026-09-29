@@ -1,6 +1,6 @@
 import{describe,expect,it}from'vitest'
 import{ContentType}from'@cms/database'
-import{contentSearchFilters,localizeContent,publicContentWhere}from'./content.js'
+import{contentSearchFilters,localizeContent,publicContentWhere,publicListingCountry}from'./content.js'
 
 describe('content route filters',()=>{
   it('builds category, featured, and search filters',()=>{
@@ -22,6 +22,12 @@ describe('content route filters',()=>{
       tags:{has:'launch'},
       isFeatured:false
     })
+  })
+  it('uses a requested visible country instead of falling back to the default',()=>{
+    const visible=new Set(['MY','SG'])
+    expect(publicListingCountry('sg',visible,'MY')).toBe('SG')
+    expect(publicListingCountry('all',visible,'MY')).toBe('all')
+    expect(publicListingCountry('ID',visible,'MY')).toBe('MY')
   })
   it('returns Simplified Chinese by default and a linked English variant on request',()=>{
     const item={id:'story',title:'中文标题',excerpt:'中文摘要',markdown:'中文内容',html:'<p>中文内容</p>',wordCount:4,translations:[{language:'EN',title:'English title',excerpt:'English excerpt',markdown:'English body',html:'<p>English body</p>',wordCount:2}]}
