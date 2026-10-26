@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify'
 import { Readable } from 'node:stream'
 import { ContentType, prisma } from '@cms/database'
 import { config } from '../config.js'
+import { builtInLegalSlugs } from '../legal-pages.js'
 
 const escapeXml = (value: string) => value.replace(/[<>&'"]/g, char => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', "'": '&apos;', '"': '&quot;' }[char]!))
 const siteUrl = (path = '/') => new URL(path, config.PUBLIC_BASE_URL).toString()
@@ -25,6 +26,8 @@ export async function feedRoutes(app: FastifyInstance) {
 
 - [Home](${siteUrl('/')}): Latest stories, featured editorial picks, topic navigation, and subscription callout.
 - [About](${siteUrl('/page/about-thepaperleaf')}): Publication purpose, editorial approach, and reader promise.
+- [Privacy Policy](${siteUrl('/page/privacy-policy')}): How ThePaperLeaf handles data used by Search Insights.
+- [Terms of Service](${siteUrl('/page/terms-of-service')}): Terms governing the public site and authorized Search Insights access.
 - [Search](${siteUrl('/search')}): Reader-facing story search.
 - [Sitemap](${siteUrl('/sitemap.xml')}): Machine-readable index of public pages, categories, and articles.
 - [RSS feed](${siteUrl('/rss.xml')}): Latest published stories in RSS format.
@@ -58,6 +61,7 @@ Use story title, canonical article URL, publication date, author, and source lab
     const urls = [
       { loc: siteUrl('/'), lastmod: new Date() },
       ...categories.map(category => ({ loc: categoryUrl(category.slug), lastmod: category.updatedAt })),
+      ...builtInLegalSlugs.filter(slug => !pages.some(page => page.slug === slug)).map(slug => ({ loc: pageUrl(slug), lastmod: new Date('2026-10-26T00:00:00.000Z') })),
       ...pages.map(page => ({ loc: pageUrl(page.slug), lastmod: page.updatedAt || page.publishedAt })),
       ...posts.map(post => ({ loc: articleUrl(post.slug), lastmod: post.updatedAt || post.publishedAt }))
     ]

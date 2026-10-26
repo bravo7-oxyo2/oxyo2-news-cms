@@ -46,15 +46,17 @@ The demo news seed uses remote Unsplash image URLs for thumbnails and in-article
 
 The private CMS admin includes **Search Insights** at `/search-insights`. It reads live Search Console performance, sitemap, and priority URL-inspection data, displays it in the admin, and exports the active date range as an AI-ready JSON file. It does not save analytics data to PostgreSQL.
 
-Create a **Web application** OAuth client in Google Cloud, enable the Google Search Console API, and register this redirect URI:
+Search Insights is available in both development and production. Create a **Web application** OAuth client in Google Cloud, enable the Google Search Console API, and register this redirect URI:
 
 ```text
 https://YOUR_CMS_ADMIN_DOMAIN/api/admin/search-console/oauth/callback
 ```
 
-For local development, register `http://localhost:5173/api/admin/search-console/oauth/callback`. Add the Web client's ID and secret to the API environment along with a unique `GSC_TOKEN_ENCRYPTION_KEY`; set `GSC_TOKEN_STORE_PATH` to a private, server-only file outside the repository. The CMS requests only the `webmasters.readonly` scope. A CMS administrator can then connect an account with Search Console access and select the ThePaperLeaf property. Never add the OAuth JSON, client secret, encrypted connection file, or export data to Git.
+For local development, register `http://localhost:5173/api/admin/search-console/oauth/callback`. For production, register the HTTPS callback under `ADMIN_ORIGIN`, for example `https://admin.thepaperleaf.com/api/admin/search-console/oauth/callback`. Add the Web client's ID and secret to the API environment along with a unique `GSC_TOKEN_ENCRYPTION_KEY`; set `GSC_TOKEN_STORE_PATH` to a private, server-only file outside the repository. The CMS requests only the `webmasters.readonly` scope. A CMS administrator can then connect an account with Search Console access and select the ThePaperLeaf property. Never add the OAuth JSON, client secret, encrypted connection file, or export data to Git.
 
-The daily Codex automation, rather than the CMS web page, retrieves its fresh AI context from the development-only local endpoint `GET /api/admin/search-console/automation-export`. Set a unique `GSC_AUTOMATION_EXPORT_TOKEN` (at least 32 characters) and send it as `Authorization: Bearer <token>`. The endpoint is unavailable outside development and never exposes the token to the browser. The automation atomically replaces the ignored `analysis/search-insights-current.json`, then invokes the installed `thepaperleaf-gsc-optimizer` skill in its own local Codex environment. The active CMS checkout remains untouched unless the skill’s safe-fix and PR checks independently pass. Never add the token, exported context, or generated artifacts to Git.
+The daily Codex automation, rather than the CMS web page, retrieves its fresh AI context from `GET /api/admin/search-console/automation-export`. The endpoint is available in production only over HTTPS, requires a dedicated `GSC_AUTOMATION_EXPORT_TOKEN` (at least 32 characters) in the `Authorization: Bearer <token>` header, disables response caching, and is limited to 10 requests per source IP per day. It returns `404` when the token is absent or invalid so the private integration is not advertised. Generate the production token with `openssl rand -base64 48`, store it only in the API environment and the Codex Cloud secret store, and never put it in a URL or browser bundle.
+
+The automation should atomically replace the ignored `analysis/search-insights-current.json`, validate that the export has `schemaVersion: "1.0"`, and then invoke the installed `thepaperleaf-gsc-optimizer` skill in its own Codex environment. The active CMS checkout remains untouched unless the skill’s safe-fix and PR checks independently pass. Never add the token, exported context, raw queries, or generated private artifacts to Git.
 
 ## EC2 deployment
 
@@ -74,7 +76,7 @@ The daily Codex automation, rather than the CMS web page, retrieves its fresh AI
    chmod 600 .env.production
    ```
 
-   Set `PUBLIC_BASE_URL` to the public news HTTPS origin, `ADMIN_ORIGIN` to the CMS admin HTTPS origin, and `UPLOAD_DIR=/home/ubuntu/apps/cms/shared/uploads`. `DEEPSEEK_API_KEY` is required before production news-bot processing can run; use `DEEPSEEK_API_URL=https://api.deepseek.com` and `DEEPSEEK_MODEL=deepseek-chat`. Add stock provider keys only for the providers you intend to use; the fallback order is Pexels, Pixabay, Unsplash, then the built-in non-AI fallback. This file is never synchronized.
+   Set `PUBLIC_BASE_URL` to the public news HTTPS origin, `ADMIN_ORIGIN` to the CMS admin HTTPS origin, and `UPLOAD_DIR=/home/ubuntu/apps/cms/shared/uploads`. To use Search Insights in production, also set `GSC_OAUTH_CLIENT_ID`, `GSC_OAUTH_CLIENT_SECRET`, `GSC_TOKEN_ENCRYPTION_KEY`, and the private `GSC_TOKEN_STORE_PATH`; the OAuth callback defaults to `${ADMIN_ORIGIN}/api/admin/search-console/oauth/callback`. Set `GSC_AUTOMATION_EXPORT_TOKEN` only when the protected server-to-server automation export is required. `DEEPSEEK_API_KEY` is required before production news-bot processing can run; use `DEEPSEEK_API_URL=https://api.deepseek.com` and `DEEPSEEK_MODEL=deepseek-chat`. Add stock provider keys only for the providers you intend to use; the fallback order is Pexels, Pixabay, Unsplash, then the built-in non-AI fallback. This file is never synchronized.
 4. Replace `CMS_ADMIN_DOMAIN` and `NEWS_DOMAIN` in `deploy/nginx.conf`, copy it to `/etc/nginx/sites-available/cms`, enable it, test with `sudo nginx -t`, and reload Nginx.
 5. Configure HTTPS with Certbot (`sudo apt install certbot python3-certbot-nginx && sudo certbot --nginx -d admin-domain -d news-domain`). Secure cookies require HTTPS in production.
 6. Seed once on the server: `set -a; source .env.production; set +a; pnpm db:seed`.

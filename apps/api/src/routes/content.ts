@@ -4,6 +4,7 @@ import { requireAdmin } from '../auth.js'
 import { normalizeStatus, renderMarkdown, slugify, wordCount } from '../lib/content.js'
 import { pingIndexNow } from '../lib/indexnow.js'
 import { isIsoCountryCode, normalizeCountryCode, publicCountryConfiguration } from '../news-bot/countries.js'
+import { builtInLegalPage } from '../legal-pages.js'
 
 const types = { posts: ContentType.POST, pages: ContentType.PAGE }
 const translationSelect = { id: true, language: true, title: true, excerpt: true, markdown: true, html: true, wordCount: true, seoTitle: true, seoDescription: true, createdAt: true, updatedAt: true }
@@ -122,7 +123,7 @@ export async function publicRoutes(app: FastifyInstance) {
       await prisma.content.updateMany({ where: { type, status: 'SCHEDULED', scheduledAt: { lte: now } }, data: { status: 'PUBLISHED', publishedAt: now } })
       const where: any = type === ContentType.POST ? await publicPostListingWhere(q, now) : publicContentWhere(type, q, now); const [items,total] = await prisma.$transaction([prisma.content.findMany({ where, select, orderBy: [{ isFeatured: 'desc' }, { publishedAt: 'desc' }] as any, skip:(page-1)*limit,take:limit }),prisma.content.count({where})]); return { data:await withImageCredits(items, q.lang),meta:{page,limit,total,pages:Math.ceil(total/limit)} }
     })
-    app.get(`/${path}/:slug`, async (req, reply) => { reply.header('Cache-Control','public, max-age=60, stale-while-revalidate=300'); const item = await prisma.content.findUnique({ where: { type_slug: { type, slug: (req.params as any).slug } }, select }); return item?.status === 'PUBLISHED' && item.publishedAt && item.publishedAt <= new Date() ? { data: (await withImageCredits([item], (req.query as any).lang))[0] } : reply.code(404).send({error:{code:'NOT_FOUND',message:'Content not found'}}) })
+    app.get(`/${path}/:slug`, async (req, reply) => { reply.header('Cache-Control','public, max-age=60, stale-while-revalidate=300'); const slug = String((req.params as any).slug || ''); const item = await prisma.content.findUnique({ where: { type_slug: { type, slug } }, select }); if (item?.status === 'PUBLISHED' && item.publishedAt && item.publishedAt <= new Date()) return { data: (await withImageCredits([item], (req.query as any).lang))[0] }; const locale = (req.query as any).lang === 'en' ? 'en' : 'zh-CN'; const legal = type === ContentType.PAGE ? builtInLegalPage(slug, locale) : null; return legal ? { data: legal } : reply.code(404).send({error:{code:'NOT_FOUND',message:'Content not found'}}) })
   }
   app.get('/countries', async (_req, reply) => {
     reply.header('Cache-Control', 'public, max-age=60, stale-while-revalidate=300')

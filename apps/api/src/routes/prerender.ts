@@ -2,6 +2,7 @@ import type { FastifyInstance, FastifyReply } from 'fastify'
 import { readFileSync } from 'node:fs'
 import { ContentType, prisma } from '@cms/database'
 import { config } from '../config.js'
+import { builtInLegalPage } from '../legal-pages.js'
 import { localizeContent, publicPostListingWhere } from './content.js'
 
 type Locale = 'zh-CN' | 'en'
@@ -135,7 +136,7 @@ function siteHeader(categories: Array<{ name: string; nameZh?: string | null; sl
   const nav = categories.map(category => `<a href="${escapeHtml(withLang(`/category/${category.slug}`, locale))}">${escapeHtml(categoryLabel(category, locale))}</a>`).join('')
   return `<header class="site-header"><a class="logo" href="${withLang('/', locale)}">${siteName}<span>.</span></a><nav aria-label="Primary navigation">${nav}</nav><div class="header-actions"><form class="top-search" action="${escapeHtml(withLang('/search', locale))}" role="search"><input name="q" aria-label="${locale === 'zh-CN' ? '搜索新闻' : 'Search news'}" placeholder="${locale === 'zh-CN' ? '搜索' : 'Search'}" /><button type="submit">${locale === 'zh-CN' ? '搜索' : 'Go'}</button></form><div class="language-switch global-language-switch" aria-label="${locale === 'zh-CN' ? '语言' : 'Language'}"><a class="${locale === 'zh-CN' ? 'active' : ''}" href="/">中文</a><a class="${locale === 'en' ? 'active' : ''}" href="/?lang=en">EN</a></div></div></header>`
 }
-const siteFooter = (locale: Locale) => `<footer><b>${siteName}<span>.</span></b><p>${locale === 'zh-CN' ? '为好奇读者而设的独立杂志式新闻。' : 'Independent magazine-style news for curious readers.'}</p></footer>`
+const siteFooter = (locale: Locale) => `<footer><div class="footer-copy"><b>${siteName}<span>.</span></b><p>${locale === 'zh-CN' ? '为好奇读者而设的独立杂志式新闻。' : 'Independent magazine-style news for curious readers.'}</p></div><nav class="footer-links" aria-label="${locale === 'zh-CN' ? '法律信息' : 'Legal'}"><a href="${withLang('/page/privacy-policy', locale)}">${locale === 'zh-CN' ? '隐私政策' : 'Privacy Policy'}</a><a href="${withLang('/page/terms-of-service', locale)}">${locale === 'zh-CN' ? '服务条款' : 'Terms of Service'}</a></nav></footer>`
 
 function postMeta(post: any, locale: Locale) {
   const date = post.publishedAt || post.createdAt
@@ -290,6 +291,15 @@ export async function prerenderRoutes(app: FastifyInstance) {
     const locale = localeFrom(req.query as Record<string, string>)
     const slug = String((req.params as any).slug || '')
     const [categories, item] = await Promise.all([activeCategories(), prisma.content.findUnique({ where: { type_slug: { type: ContentType.PAGE, slug } }, select: articleSelect as any })])
+    const itemIsPublic = Boolean(item && (item as any).status === 'PUBLISHED' && (item as any).publishedAt && (item as any).publishedAt <= new Date())
+    const legal = !itemIsPublic ? builtInLegalPage(slug, locale) : null
+    if (legal) {
+      const path = `/page/${slug}`
+      const description = legal.seoDescription || legal.excerpt
+      const head = headBlock({ title: `${legal.seoTitle || legal.title} — ${siteName}`, description, canonical: absolute(withLang(path, locale)), locale, alternatePath: path, hasEnglish: true, jsonLd: [{ id: `page-${slug}`, data: { '@context': 'https://schema.org', '@type': 'WebPage', name: legal.title, url: absolute(withLang(path, locale)), description, inLanguage: locale, publisher: publisherJsonLd() } }] })
+      const body = `${siteHeader(categories, locale)}<main class="static-page legal-page"><section class="static-hero"><span class="kicker">${locale === 'zh-CN' ? '法律信息' : 'Legal'}</span><h1>${escapeHtml(legal.title)}</h1><p>${escapeHtml(legal.excerpt)}</p></section><div class="article-body">${legal.html}</div></main>${siteFooter(locale)}`
+      return sendPage(reply, locale, head, body, 200, { path: req.url, locale, categories, page: legal })
+    }
     if (!item && (slug === 'about-thepaperleaf' || slug === 'about-this-cms')) {
       // The news app renders the About page from built-in copy when no CMS page exists.
       const about = locale === 'zh-CN'
@@ -299,7 +309,7 @@ export async function prerenderRoutes(app: FastifyInstance) {
       const head = headBlock({ title: `${about.title} — ${siteName}`, description: about.excerpt, canonical: absolute(withLang(path, locale)), locale, alternatePath: path })
       return sendPage(reply, locale, head, `${siteHeader(categories, locale)}<main class="article-page"><article><h1>${escapeHtml(about.title)}</h1><div class="article-body">${about.html}</div></article></main>${siteFooter(locale)}`)
     }
-    if (!item || (item as any).status !== 'PUBLISHED' || !(item as any).publishedAt || (item as any).publishedAt > new Date()) return notFound(reply, categories, locale)
+    if (!itemIsPublic) return notFound(reply, categories, locale)
     const page = localizeContent(item, locale === 'en' ? 'en' : undefined)
     const path = `/page/${page.slug}`
     const head = headBlock({ title: `${page.seoTitle || page.title} — ${siteName}`, description: page.seoDescription || page.excerpt || '', canonical: absolute(withLang(path, locale)), locale, alternatePath: path, hasEnglish: page.availableLanguages?.includes('en') })

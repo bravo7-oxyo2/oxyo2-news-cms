@@ -482,6 +482,21 @@ h3{font-size:1.5rem;line-height:1.02;letter-spacing:-.045em;font-weight:900;text
 .about-page .static-hero h1{color:white}
 .about-page .static-hero p{color:#f0eefb;max-width:780px}
 .about-page .article-body{padding:0 58px 58px}
+.legal-page{max-width:1040px;padding:0;overflow:hidden}
+.legal-page .static-hero{
+  margin:0;
+  padding:54px 58px 42px;
+  background:
+    radial-gradient(circle at 88% 18%,rgba(230,255,63,.8) 0 7%,transparent 7.5%),
+    linear-gradient(135deg,#f5f3ff 0%,#fff 62%,#eef2ff 100%);
+}
+.legal-page .static-hero h1{font-size:clamp(3rem,6vw,5rem)}
+.legal-page .article-body{max-width:800px;padding:8px 58px 60px}
+.legal-page .article-body h2{padding-top:1.35em;border-top:1px solid var(--line);font-size:clamp(1.55rem,3vw,2.15rem)}
+.legal-page .article-body ul{padding-left:1.3em}
+.legal-page .article-body li{margin:.5em 0}
+.legal-page .article-body a{color:var(--purple);text-underline-offset:3px}
+.legal-effective{display:inline-flex;margin:0 0 18px;padding:8px 12px;border-radius:999px;background:#f0eff7;color:#57535f;font-size:.88rem;letter-spacing:.01em}
 .about-highlights{
   display:grid;
   grid-template-columns:repeat(4,1fr);
@@ -511,7 +526,11 @@ h3{font-size:1.5rem;line-height:1.02;letter-spacing:-.045em;font-weight:900;text
 .state{margin-top:60px;min-height:220px;display:grid;place-content:center;color:var(--muted);background:white;border:1px solid var(--line);border-radius:28px;padding:30px}
 .error{color:#8f2f26}
 .empty-copy{grid-column:1/-1;background:white;border:1px dashed var(--line);border-radius:24px;padding:36px;text-align:center}
-footer{border-top:1px solid var(--line);padding:35px max(20px,calc((100vw - 1200px)/2));display:flex;justify-content:space-between;color:var(--muted);background:#fff}
+footer{border-top:1px solid var(--line);padding:35px max(20px,calc((100vw - 1200px)/2));display:flex;justify-content:space-between;align-items:flex-start;gap:28px;color:var(--muted);background:#fff}
+.footer-copy p{margin:.55rem 0 0}
+.footer-links{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:10px 22px}
+.footer-links a{color:var(--muted);font-size:.88rem;font-weight:800;text-decoration:none}
+.footer-links a:hover{color:var(--purple);text-decoration:underline;text-underline-offset:4px}
 
 @media(max-width:1080px){
   .hero-shell{grid-template-columns:1fr 1fr;padding:34px}
@@ -572,7 +591,8 @@ footer{border-top:1px solid var(--line);padding:35px max(20px,calc((100vw - 1200
   .topics{grid-template-columns:1fr;margin-left:calc(50% - 50vw);margin-right:calc(50% - 50vw)}
   .topic{background-image:linear-gradient(180deg,#00000005 35%,#000000d8),var(--topic-image-mobile,var(--topic-image)),linear-gradient(135deg,color-mix(in srgb,var(--topic,#2521e1) 70%,#000),#151515)}
   .skeleton-topics{min-height:1680px}
-  .section-title,.newsletter,footer{display:block}
+  .section-title,.newsletter{display:block}
+  footer{flex-direction:column}
   .newsletter{padding:34px 22px}
   .newsletter form{min-width:0;flex-direction:column;border-radius:20px}
   .newsletter input{min-height:44px;padding-inline:12px}
@@ -590,8 +610,10 @@ footer{border-top:1px solid var(--line);padding:35px max(20px,calc((100vw - 1200
   .image-credits{padding:16px}
   .related{padding:14px}
   .about-page .static-hero,.about-page .article-body{padding-left:22px;padding-right:22px}
+  .legal-page .static-hero,.legal-page .article-body{padding-left:22px;padding-right:22px}
   .about-highlights{grid-template-columns:1fr;padding-left:22px;padding-right:22px}
   .static-page{margin-top:24px;margin-bottom:34px;padding:22px}
+  .legal-page{padding:0}
   .static-hero{margin:-22px -22px 22px;padding:32px 22px 26px}
   h1{font-size:clamp(2.35rem,11vw,3.4rem);overflow-wrap:anywhere}
   h2{font-size:clamp(2.15rem,10vw,3rem);overflow-wrap:anywhere}
@@ -629,12 +651,14 @@ footer{border-top:1px solid var(--line);padding:35px max(20px,calc((100vw - 1200
   .newsletter:after{display:none}
   footer{padding:26px 12px}
   footer p{margin:12px 0 0}
+  .footer-links{justify-content:flex-start;margin-top:18px}
   .article-page .dek{font-size:1rem}
   .article-page .meta{gap:8px;font-size:11px}
   .backlink{min-height:44px;padding:8px 11px}
   .language-switch button{min-height:40px}
   .related h3{font-size:1.7rem}
   .about-page .static-hero,.about-page .article-body{padding-left:18px;padding-right:18px}
+  .legal-page .static-hero,.legal-page .article-body{padding-left:18px;padding-right:18px}
   .about-highlights{padding-left:18px;padding-right:18px}
 }
 @media(max-width:360px){

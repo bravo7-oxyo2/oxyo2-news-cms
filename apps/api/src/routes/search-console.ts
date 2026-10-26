@@ -18,7 +18,6 @@ function matchesAutomationToken(authorization: string | undefined) {
 }
 
 export async function searchConsoleRoutes(app: FastifyInstance) {
-  if (config.NODE_ENV !== 'development') return
   app.get('/status', { preHandler: requireAdmin }, async (_req, reply) => {
     try { return { data: await connectionStatus() } } catch (error) { return errorResponse(reply, error) }
   })
@@ -67,8 +66,10 @@ export async function searchConsoleRoutes(app: FastifyInstance) {
       return reply.header('Content-Disposition', `attachment; filename="thepaperleaf-search-insights-${safeStart}-to-${safeEnd}.json"`).type('application/json; charset=utf-8').send(report)
     } catch (error) { return errorResponse(reply, error) }
   })
-  app.get('/automation-export', async (req, reply) => {
-    if (config.NODE_ENV !== 'development' || !matchesAutomationToken(req.headers.authorization)) return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'Not found.' } })
+  app.get('/automation-export', { config: { rateLimit: { max: 10, timeWindow: '1 day' } } }, async (req, reply) => {
+    reply.header('Cache-Control', 'no-store').header('Pragma', 'no-cache')
+    const secureTransport = config.NODE_ENV !== 'production' || req.protocol === 'https'
+    if (!secureTransport || !matchesAutomationToken(req.headers.authorization)) return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'Not found.' } })
     try {
       const report = await getSearchConsoleReport(req.query as Record<string, unknown>)
       return reply.type('application/json; charset=utf-8').send(report)
