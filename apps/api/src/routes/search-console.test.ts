@@ -1,12 +1,16 @@
 import Fastify from 'fastify'
 import rateLimit from '@fastify/rate-limit'
+import { EventEmitter } from 'node:events'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-const { automationToken, fetchMock, getSearchConsoleReport } = vi.hoisted(() => ({
+const { automationToken, getSearchConsoleReport, httpsRequestMock, telegramState } = vi.hoisted(() => ({
   automationToken: 'a'.repeat(48),
-  fetchMock: vi.fn(),
   getSearchConsoleReport: vi.fn(),
+  httpsRequestMock: vi.fn(),
+  telegramState: { statusCode: 200, body: '{"ok":true}' },
 }))
+
+vi.mock('node:https', () => ({ request: httpsRequestMock }))
 
 vi.mock('../config.js', () => ({
   config: {
@@ -71,13 +75,27 @@ async function buildTestApp() {
 describe('Search Console automation export', () => {
   beforeEach(() => {
     getSearchConsoleReport.mockReset().mockResolvedValue({ schemaVersion: '1.0' })
-    fetchMock.mockReset().mockResolvedValue({ ok: true, json: async () => ({ ok: true }) })
-    vi.stubGlobal('fetch', fetchMock)
+    telegramState.statusCode = 200
+    telegramState.body = '{"ok":true}'
+    httpsRequestMock.mockReset().mockImplementation((_options, callback) => {
+      const request = new EventEmitter() as EventEmitter & { destroy: ReturnType<typeof vi.fn>; end: ReturnType<typeof vi.fn> }
+      request.destroy = vi.fn(error => { queueMicrotask(() => request.emit('error', error)) })
+      request.end = vi.fn(() => {
+        queueMicrotask(() => {
+          const providerResponse = new EventEmitter() as EventEmitter & { setEncoding: ReturnType<typeof vi.fn>; statusCode: number }
+          providerResponse.statusCode = telegramState.statusCode
+          providerResponse.setEncoding = vi.fn()
+          callback(providerResponse)
+          providerResponse.emit('data', telegramState.body)
+          providerResponse.emit('end')
+        })
+      })
+      return request
+    })
   })
 
   afterEach(async () => {
     await Promise.all(apps.splice(0).map(app => app.close()))
-    vi.unstubAllGlobals()
   })
 
   it('serves a non-cacheable report over HTTPS with the configured bearer token', async () => {
@@ -144,10 +162,11 @@ describe('Search Console automation export', () => {
     expect(response.statusCode).toBe(200)
     expect(response.headers['cache-control']).toBe('no-store')
     expect(response.json()).toEqual({ data: { delivered: true } })
-    expect(fetchMock).toHaveBeenCalledOnce()
-    const [url, request] = fetchMock.mock.calls[0]!
-    expect(url).toBe('https://api.telegram.org/bottelegram-test-token/sendMessage')
-    expect(JSON.parse(String(request.body))).toEqual({ chat_id: '-1001234567890', text: telegramReport, disable_web_page_preview: true })
+    expect(httpsRequestMock).toHaveBeenCalledOnce()
+    const [options] = httpsRequestMock.mock.calls[0]!
+    expect(options).toMatchObject({ hostname: 'api.telegram.org', port: 443, family: 4, method: 'POST', path: '/bottelegram-test-token/sendMessage' })
+    const request = httpsRequestMock.mock.results[0]!.value
+    expect(JSON.parse(String(request.end.mock.calls[0]![0]))).toEqual({ chat_id: '-1001234567890', text: telegramReport, disable_web_page_preview: true })
   })
 
   it('rejects malformed or sensitive Telegram reports before delivery', async () => {
@@ -161,11 +180,12 @@ describe('Search Console automation export', () => {
 
     expect(response.statusCode).toBe(400)
     expect(response.json().error.code).toBe('INVALID_AUTOMATION_REPORT')
-    expect(fetchMock).not.toHaveBeenCalled()
+    expect(httpsRequestMock).not.toHaveBeenCalled()
   })
 
   it('conceals Telegram delivery details when the provider fails', async () => {
-    fetchMock.mockRejectedValueOnce(new Error('request exposed telegram-test-token'))
+    telegramState.statusCode = 502
+    telegramState.body = '{"ok":false,"description":"request exposed telegram-test-token"}'
     const app = await buildTestApp()
     const response = await app.inject({
       method: 'POST',
