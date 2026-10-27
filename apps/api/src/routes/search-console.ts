@@ -3,6 +3,7 @@ import type { FastifyInstance } from 'fastify'
 import { requireAdmin } from '../auth.js'
 import { config } from '../config.js'
 import { authorizationUrl, connectionStatus, disconnectSearchConsole, getSearchConsoleReport, listSearchConsoleProperties, saveAuthorizationCode, SearchConsoleConfigurationError, selectSearchConsoleProperty } from '../search-console.js'
+import { sendTelegramReport, TelegramConfigurationError, TelegramReportValidationError, validateGscTelegramReport } from '../telegram.js'
 
 const errorResponse = (reply: any, error: unknown) => {
   const message = error instanceof Error ? error.message : 'Search Console request failed.'
@@ -74,6 +75,20 @@ export async function searchConsoleRoutes(app: FastifyInstance) {
       const report = await getSearchConsoleReport(req.query as Record<string, unknown>)
       return reply.type('application/json; charset=utf-8').send(report)
     } catch (error) { return errorResponse(reply, error) }
+  })
+  app.post('/automation-notify', { config: { rateLimit: { max: 10, timeWindow: '1 day' } } }, async (req, reply) => {
+    reply.header('Cache-Control', 'no-store').header('Pragma', 'no-cache')
+    const secureTransport = config.NODE_ENV !== 'production' || req.protocol === 'https'
+    if (!secureTransport || !matchesAutomationToken(req.headers.authorization)) return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'Not found.' } })
+    try {
+      const message = validateGscTelegramReport((req.body as { message?: unknown } | undefined)?.message)
+      await sendTelegramReport(message)
+      return { data: { delivered: true } }
+    } catch (error) {
+      if (error instanceof TelegramReportValidationError) return reply.code(400).send({ error: { code: 'INVALID_AUTOMATION_REPORT', message: error.message } })
+      if (error instanceof TelegramConfigurationError) return reply.code(503).send({ error: { code: 'TELEGRAM_NOT_CONFIGURED', message: error.message } })
+      return reply.code(502).send({ error: { code: 'TELEGRAM_UNAVAILABLE', message: 'Telegram report delivery failed.' } })
+    }
   })
   app.delete('/connection', { preHandler: requireAdmin }, async (_req, reply) => {
     try { await disconnectSearchConsole(); return { data: { disconnected: true } } } catch (error) { return errorResponse(reply, error) }

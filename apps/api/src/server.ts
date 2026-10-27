@@ -27,7 +27,7 @@ export async function buildApp() {
   await app.register(csrf,{sessionPlugin:'@fastify/session'}); await app.register(rateLimit,{global:false}); await app.register(multipart,{limits:{fileSize:config.MAX_UPLOAD_BYTES,files:1}})
   await app.register(swagger,{openapi:{info:{title:'Personal CMS API',version:'1.0.0'},tags:[{name:'public'},{name:'admin'}]}}); await app.register(swaggerUi,{routePrefix:'/docs'})
   app.get('/health',async()=>({status:'ok'})); app.get('/ready',async(_req,reply)=>{try{await prisma.$queryRaw`SELECT 1`;return{status:'ready'}}catch{return reply.code(503).send({status:'unavailable'})}})
-  const csrfExemptAdminPaths = new Set(['/auth/login','/auth/forgot-password','/auth/reset-password','/api/admin/auth/login','/api/admin/auth/forgot-password','/api/admin/auth/reset-password'])
+  const csrfExemptAdminPaths = new Set(['/auth/login','/auth/forgot-password','/auth/reset-password','/api/admin/auth/login','/api/admin/auth/forgot-password','/api/admin/auth/reset-password','/api/admin/search-console/automation-notify'])
   await app.register(async admin=>{
     admin.addHook('preHandler',(req,reply,done)=>{const path = req.url.split('?')[0] ?? ''; if(['GET','HEAD','OPTIONS'].includes(req.method)||csrfExemptAdminPaths.has(path)) return done(); admin.csrfProtection(req,reply,done)})
     await admin.register(authRoutes,{prefix:'/auth'}); await admin.register(contentRoutes,{prefix:'/content'}); await admin.register(mediaRoutes,{prefix:'/media'}); await admin.register(categoryRoutes,{prefix:'/categories'}); await admin.register(newsBotRoutes,{prefix:'/news-bot'}); await admin.register(searchConsoleRoutes,{prefix:'/search-console'})

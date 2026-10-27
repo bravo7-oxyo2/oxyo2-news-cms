@@ -1,0 +1,4 @@
+interface:
+  display_name: "ThePaperLeaf GSC Optimizer"
+  short_description: "Analyze GSC evidence and open safe SEO PRs"
+  default_prompt: "Use $thepaperleaf-gsc-optimizer to fetch or validate the configured Search Insights export, analyze it against the CMS and public site, recommend safe improvements, and deliver the required terminal report."

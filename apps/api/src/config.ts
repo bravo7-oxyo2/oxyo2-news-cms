@@ -27,7 +27,8 @@ const parsedConfig = z.object({
   GSC_TOKEN_ENCRYPTION_KEY: z.string().optional(), GSC_TOKEN_STORE_PATH: z.string().default('./gsc-connection.enc'),
   GSC_OAUTH_REDIRECT_URI: z.preprocess(value => value === '' ? undefined : value, z.string().url().optional()),
   GSC_AUTOMATION_EXPORT_TOKEN: z.preprocess(value => value === '' ? undefined : value, z.string().min(32).optional()),
-  TELEGRAM_BOT_TOKEN: z.string().min(1).optional(), TELEGRAM_CHAT_ID: z.string().min(1).optional(),
+  TELEGRAM_BOT_TOKEN: z.preprocess(value => value === '' ? undefined : value, z.string().min(1).optional()),
+  TELEGRAM_CHAT_ID: z.preprocess(value => value === '' ? undefined : value, z.string().min(1).optional()),
 }).parse(process.env)
 
 export const config = {
