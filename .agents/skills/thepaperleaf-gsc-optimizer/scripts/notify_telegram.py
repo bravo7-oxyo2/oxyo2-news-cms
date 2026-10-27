@@ -6,11 +6,12 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
+import subprocess
 import sys
+import tempfile
 from pathlib import Path
-from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
-from urllib.request import Request, urlopen
 
 
 MAX_MESSAGE_BYTES = 16 * 1024
@@ -55,8 +56,20 @@ def notification_url() -> str:
     notify_url = os.environ.get("PAPERLEAF_GSC_NOTIFY_URL", "")
     export = urlparse(export_url)
     notify = urlparse(notify_url)
-    if export.scheme != "https" or notify.scheme != "https" or not export.hostname or export.hostname != notify.hostname:
-        raise NotificationError("Export and notification URLs must use HTTPS on the same host.")
+    invalid = (
+        export.scheme != "https"
+        or notify.scheme != "https"
+        or not export.hostname
+        or export.hostname != notify.hostname
+        or export.port not in (None, 443)
+        or notify.port not in (None, 443)
+        or export.username is not None
+        or export.password is not None
+        or notify.username is not None
+        or notify.password is not None
+    )
+    if invalid:
+        raise NotificationError("Export and notification URLs must use HTTPS port 443 on the same host without embedded credentials.")
     return notify_url
 
 
@@ -64,24 +77,44 @@ def deliver(message: str) -> None:
     token = os.environ.get("PAPERLEAF_GSC_EXPORT_TOKEN", "")
     if not token:
         raise NotificationError("PAPERLEAF_GSC_EXPORT_TOKEN is required.")
-    request = Request(
-        notification_url(),
-        data=json.dumps({"message": message}, ensure_ascii=False).encode("utf-8"),
-        headers={"Accept": "application/json", "Authorization": f"Bearer {token}", "Content-Type": "application/json"},
-        method="POST",
-    )
-    try:
-        with urlopen(request, timeout=30) as response:
-            body = response.read(1024 * 1024 + 1)
-            if response.status != 200 or len(body) > 1024 * 1024:
-                raise NotificationError("Telegram broker rejected the report.")
-            result = json.loads(body.decode("utf-8"))
-            if result != {"data": {"delivered": True}}:
-                raise NotificationError("Telegram broker returned an unexpected response.")
-    except HTTPError as exc:
-        raise NotificationError(f"Telegram broker returned HTTP {exc.code}.") from None
-    except (URLError, TimeoutError, json.JSONDecodeError, UnicodeDecodeError):
-        raise NotificationError("Telegram broker request failed.") from None
+    if any(character in token for character in ('\n', '\r', '"', '\\')):
+        raise NotificationError("PAPERLEAF_GSC_EXPORT_TOKEN contains unsupported characters.")
+    if shutil.which("curl") is None:
+        raise NotificationError("curl is required for Cloud notification delivery.")
+
+    curl_config = "\n".join((
+        'header = "Accept: application/json"',
+        f'header = "Authorization: Bearer {token}"',
+        'header = "Content-Type: application/json"',
+        "",
+    ))
+    with tempfile.TemporaryDirectory(prefix="thepaperleaf-telegram-") as temporary:
+        temporary_path = Path(temporary)
+        payload_path = temporary_path / "payload.json"
+        response_path = temporary_path / "response.json"
+        payload_path.write_text(json.dumps({"message": message}, ensure_ascii=False), encoding="utf-8")
+        payload_path.chmod(0o600)
+        command = (
+            "curl", "--config", "-", "--silent", "--show-error",
+            "--request", "POST", "--connect-timeout", "15", "--max-time", "30",
+            "--max-filesize", str(1024 * 1024), "--proto", "=https", "--tlsv1.2",
+            "--data-binary", f"@{payload_path}", "--output", str(response_path),
+            "--write-out", "%{http_code}", "--url", notification_url(),
+        )
+        completed = subprocess.run(command, input=curl_config, text=True, capture_output=True, check=False)
+        if completed.returncode != 0:
+            raise NotificationError("Telegram broker request failed.")
+        status = completed.stdout.strip()
+        if status != "200":
+            if status.isdigit() and len(status) == 3:
+                raise NotificationError(f"Telegram broker returned HTTP {status}.")
+            raise NotificationError("Telegram broker returned an invalid HTTP status.")
+        try:
+            result = json.loads(response_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+            raise NotificationError("Telegram broker returned an invalid response.") from None
+        if result != {"data": {"delivered": True}}:
+            raise NotificationError("Telegram broker returned an unexpected response.")
 
 
 def main(argv: list[str] | None = None) -> int:
